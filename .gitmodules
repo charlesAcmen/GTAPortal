@@ -4,3 +4,6 @@
 [submodule "reference/gta-reversed"]
 	path = reference/gta-reversed
 	url = https://github.com/gta-reversed/gta-reversed.git
+[submodule "third_party/III.VC.SA.WindowedMode"]
+	path = third_party/III.VC.SA.WindowedMode
+	url = https://github.com/ThirteenAG/III.VC.SA.WindowedMode.git

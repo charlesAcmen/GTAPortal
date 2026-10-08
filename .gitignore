@@ -9,6 +9,7 @@
 !/third_party/plugin-sdk/
 /third_party/plugin-sdk/*
 !/third_party/plugin-sdk/plugin-sdk/
+!/third_party/III.VC.SA.WindowedMode/
 !/reference/
 /reference/*
 !/reference/gta-reversed/
@@ -18,3 +19,9 @@
 /src/PortalSA/obj/
 /src/PortalSA/.vs/
 /src/PortalSA/*.vcxproj.user
+
+# Local build output from the PortalDev utility.
+/src/PortalDev/bin/
+/src/PortalDev/obj/
+/src/PortalDev/.vs/
+/src/PortalDev/*.vcxproj.user

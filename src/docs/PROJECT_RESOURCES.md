@@ -1,14 +1,14 @@
 # GTAPortal：现有资源与跨游戏传送门分析
 
-调查日期：2026-10-08（Asia/Shanghai）。本文件汇总本地只读检查、公开项目资料和设计判断；没有编译、启动游戏、安装依赖或验证游戏内行为。
+调查日期：2026-10-08（Asia/Shanghai）。本文件最初汇总本地只读检查、公开项目资料和设计判断；初始调查阶段没有编译、启动游戏、安装依赖或验证游戏内行为，后续构建状态见下方更新段落。
 
-后续里程碑 1 已写入 `src/PortalSA/`：x86 ASI 项目、状态日志和定期最终画面 BMP。它尚待用户在 dev 游戏中编译和验收；当前操作步骤与结果判读见 `src/PortalSA/README.md`。之后又把 plugin-sdk 与 gta-reversed 登记为 Git submodule，并新增根目录 `README.md`。下文保留部分调查写作时的资源快照，涉及“尚无 PortalSA 源码”等叙述以本段更新为准。
+后续里程碑 1 已写入 `src/PortalSA/`：x86 ASI 项目、状态日志和定期最终画面 BMP；另有外部 `PortalDev.exe` 负责构建入口、dev 部署、启动、日志和抓帧状态。2026-10-08 两者已在本机成功编译，用户已在真实游戏中验收注入、相机/玩家日志、周期 BMP 和双屏窗口化工作流，M1 完成。plugin-sdk、gta-reversed 与开发运行依赖 III.VC.SA.WindowedMode 均登记为固定 commit 的 Git submodule。下文保留部分调查写作时的资源快照，涉及“尚无 PortalSA 源码”等叙述以本段更新为准。
 
 ## 1. 本次范围和结论
 
-资源调查阶段只新增根目录 `.gitignore` 和本文档。原始 `src/docs/commands.txt` 保留不变，全文收录在附录 A；后续里程碑 1 又新增 `src/PortalSA/`。
+资源调查阶段只新增根目录 `.gitignore` 和本文档。原始 `src/docs/commands.txt` 保留不变，全文收录在附录 A；后续里程碑 1 又新增 `src/PortalSA/`、`src/PortalDev/` 和开发脚本。
 
-当前有效要求优先于附录中的旧任务：里程碑 1 现已编写 PortalSA 源码，但不执行其中“直接编译并验证”的指令。编译、运行和验收由用户按 `src/PortalSA/README.md` 执行。
+当前有效要求优先于附录中的旧任务：里程碑 1 已由 Codex 编译部署，并由用户按 `src/PortalSA/README.md` 完成实机验收。
 
 长期目标是 GTA V 与经典 PC 版 GTA SA 两个独立进程，通过双向实时透视传送门连接；后续人物跨门时，切换控制权，呈现两个时代之间的视觉过渡。
 
@@ -29,20 +29,22 @@
 | --- | --- | --- |
 | 原始项目说明 | `src/docs/commands.txt` | 本次修改前唯一已有的 src 文件；保存环境、约束和阶段目标 |
 | plugin-sdk | `third_party/plugin-sdk/plugin-sdk` | 注意有两层 plugin-sdk；SA 类、事件、RenderWare 定义与 hook 工具的主要依赖 |
+| III.VC.SA.WindowedMode | `third_party/III.VC.SA.WindowedMode` | 可选开发运行依赖；解决双屏调试时独占全屏失焦最小化，不链接到 PortalSA |
 | gta-reversed | `reference/gta-reversed` | 研究相机、渲染、流式加载等实现；不构建、不注入 |
 | 游戏基准 | `game/clean/GTA San Andreas` | 保持基准环境，不部署开发产物 |
 | 开发游戏 | `game/dev/GTA San Andreas` | 已存在；后续只往这里部署插件 |
 | tools / vendor | `tools`、`vendor` | 本次未发现可用项目文件 |
 
-资源调查时根目录尚不是 Git 仓库；现在根目录已有 Git 仓库，两个第三方 checkout 已登记为 submodule。资源调查时 `src` 中尚无 PortalSA；此后已添加源码、项目文件与用户可执行的编译命令，见 `src/PortalSA/README.md`。
+资源调查时根目录尚不是 Git 仓库；现在根目录已有 Git 仓库，三个第三方 checkout 已登记为 submodule。资源调查时 `src` 中尚无 PortalSA；此后已添加源码、项目文件与用户可执行的编译命令，见 `src/PortalSA/README.md`。
 
 ### 2.1 固定第三方源码版本
 
-这两个目录现在通过 `.gitmodules` 和 Git gitlink 固定版本；跨设备克隆时需使用 `git clone --recurse-submodules`，已有 clone 则执行 `git submodule update --init --recursive`。根目录 `README.md` 有完整说明。
+这三个目录现在通过 `.gitmodules` 和 Git gitlink 固定版本；跨设备克隆时需使用 `git clone --recurse-submodules`，已有 clone 则执行 `git submodule update --init --recursive`。根目录 `README.md` 有完整说明。
 
 | 依赖 | 上游 | 当前本地 HEAD |
 | --- | --- | --- |
 | plugin-sdk | [DK22Pac/plugin-sdk](https://github.com/DK22Pac/plugin-sdk) | `15f15b60bbf74c106e1b496ff92c98764abf4605`，2026-09-08 |
+| III.VC.SA.WindowedMode | [ThirteenAG/III.VC.SA.WindowedMode](https://github.com/ThirteenAG/III.VC.SA.WindowedMode) | `f2f4e499a69019a47df35c77d354f8a1195db016`，tag `v2.2` |
 | gta-reversed | [gta-reversed/gta-reversed](https://github.com/gta-reversed/gta-reversed) | `01709e8eefdf0b4871f33a8eab19dfa0716d509f`，2026-10-04 |
 
 以下是资源调查阶段记录的**手动恢复方法**；现在优先使用上述 submodule 命令，且两种方法都不会下载游戏文件：
@@ -234,6 +236,7 @@ V 的纹理上传 → 门区域绘制
 | --- | --- | --- |
 | 已有 plugin-sdk | 现在继续使用 | SA 类型、读取、事件、hook；不提供完整 SA↔V portal pipeline |
 | 已有 gta-reversed | 现在只阅读 | 帮助理解生命周期；产物要求 Compact，不直接注入 HOODLUM |
+| [III.VC.SA.WindowedMode](https://github.com/ThirteenAG/III.VC.SA.WindowedMode) v2.2 | 已固定为可选开发运行依赖 | 解决独占全屏失焦最小化，方便第二显示器操作 PortalDev；不链接进 PortalSA，不安装到 clean 游戏 |
 | Win32 file mapping | IPC 阶段直接使用 | 不需要 Boost、gRPC、protobuf；画面阶段仍要做同步与复制 |
 | [Universal Modder 的公开示例](https://github.com/rehan-remade/universal-modder/tree/main/examples/minecraft-gta5-passthrough) | 优先参考，暂不安装整个工具包 | 参考帧传输、接收端纹理和合成；不照搬 Minecraft 逻辑、WebSocket、碰撞代理和安装脚本 |
 | [ScriptHookV SDK](https://www.dev-c.com/gtav/scripthookv/) | GTA V 阶段再获取 | V 端 native/脚本接入；不等于完整离屏渲染 SDK，也不是 SA 依赖 |
@@ -241,7 +244,7 @@ V 的纹理上传 → 门区域绘制
 | [Spout2](https://github.com/leadedge/Spout2) | CPU 链路证实且性能需要时优先评估 | Windows 图像/纹理共享 SDK，README 列出 DX9/11/12/OpenGL；需核对游戏设备能否接入，不是现成 GTA 传送门 |
 | [TsyVM/sa-sdk](https://github.com/TsyVM/sa-sdk) | 暂不加入 | 上游声明针对相同 HOODLUM MD5；本次未验证其结构和接口，不能仅凭自称 production-grade 替换已有 SDK |
 
-**现在不用增加依赖。** 如果需要新资源，优先研究公开 Minecraft↔V 案例；到 GPU 传帧优化阶段，再评估 Spout2。已有 `injector`、`hooking`、`safetyhook` 内容，不为同一用途额外引入一套 hook 库。
+除已固定的 WindowedMode 开发辅助外，**现在不用再增加依赖。** 如果需要新资源，优先研究公开 Minecraft↔V 案例；到 GPU 传帧优化阶段，再评估 Spout2。已有 `injector`、`hooking`、`safetyhook` 内容，不为同一用途额外引入一套 hook 库。
 
 未来选择 V 端时，先考虑已有案例验证过的 Legacy 路线，减少变量。[ScriptHookV 作者已宣布 Enhanced 支持](https://www.dev-c.com/post/scripthookv-enhanced)，但这不能证明案例中的渲染插件和我们的离屏方案同时兼容 Enhanced。仍需确认用户的实际 V 版本与 build；本次没有检查 V 安装，也没有下载其 SDK。
 
@@ -249,7 +252,7 @@ V 的纹理上传 → 门区域绘制
 
 | 阶段 | 最小产物 | 用户应看到的结果 |
 | --- | --- | --- |
-| M1：SA ASI probe | x86 PortalSA + 节流日志 | dev 游戏加载插件；CJ 移动时 position/heading 变化，相机转动时 camera basis/FOV 对应变化 |
+| M1：SA ASI probe（已完成） | x86 PortalSA + 节流日志 + 周期 BMP | 已实机确认 dev 游戏加载插件、状态变化、最终 backbuffer 抓取与窗口化双屏调试 |
 | M2：state IPC | file mapping + 外部 Inspector | 独立进程持续读取完整 state；确认 x86 写入和以后需要的 x64 读取布局一致 |
 | M3：相机覆盖 | 固定视角实验与恢复 | 游戏画面受指定 pose/FOV 控制；退出覆盖后恢复原相机 |
 | M4：SA 离屏相机 | 门视角 color target | 主画面保留，第二张图随请求视角变化；恢复渲染状态，不影响普通游戏画面 |
@@ -263,7 +266,27 @@ M1 可优先查本地 `FindPlayerPed()`、`CPlaceable::GetPosition()/GetHeading(
 
 plugin-sdk 的 [官方项目创建说明](https://github.com/DK22Pac/plugin-sdk/wiki/Creating-a-new-plugin-in-plugin-sdk) 推荐 installer-launcher 生成插件项目。当前 checkout 也有 `tools/premake/premake5.lua`、`premake5.exe`，脚本支持 `newplugin --type=ASI --name=... --dir=... --gtasa`，且其 `newplugin` 分支默认选择 `vs2026`；经典 SA 路径采用 x32 架构。不要假设别处的旧教程或 VS 默认值正好匹配本 checkout。
 
-里程碑 1 已用本地 Premake 模板生成 PortalSA 工程，移除了模板中停止游戏和自动部署的 post-build 操作，并在 `src/PortalSA/README.md` 提供 build/run/test 命令。尚未编译 SDK 或在游戏内验收，不能据此声称 M1 已通过。
+里程碑 1 已用本地 Premake 模板生成 PortalSA 工程，移除了模板中停止游戏和自动部署的 post-build 操作，并在 `src/PortalSA/README.md` 提供 build/run/test 命令。2026-10-08 已使用完整的 VS 2022 Build Tools v143 成功编译 plugin-sdk 与 x86 `PortalSA.asi`，并生成 x64 `PortalDev.exe`；随后用户完成上述实机验收，因此 M1 已通过。
+
+### 7.1 M2 相机 metadata 的低延迟方案
+
+当前 `OnGameProcess` 每个游戏 tick 都先更新内存中的 `g_state`，100 ms 只限制日志频率；`OnRenderScene` 还会在实际世界渲染阶段取得 view/projection 矩阵。因此已有数据源足以构造完整相机快照：position、right/forward/up、FOV、aspect/view-window、near/far、view/projection、active camera、phase，以及 frame/sequence/timestamp。建立协议前必须固定坐标系、矩阵行列约定和 FOV 轴向，不能只传一个含糊的 matrix。
+
+M2 使用一个 versioned、pointer-free、固定宽度类型的共享结构，保证 SA x86 写端与 PortalDev/未来 V x64 读端布局一致。建议用双槽或 sequence lock 发布：生产者先构造本地快照，再一次发布完成的 slot；消费者校验发布序号前后一致，只取最新完整状态，不排队、不等待旧状态。时间戳使用同机跨进程可比较的 `QueryPerformanceCounter`，PortalDev 显示 `source_frame_id`、publish rate、read rate、age_us 和 torn-read count。
+
+相机 metadata 只有数百字节，60 Hz 吞吐量只是几十 KB/s，复制成本可忽略。实际端到端年龄主要来自两个游戏 render tick 的相位与 Windows 调度：60 FPS 一帧为 16.67 ms，合理目标是目标游戏渲染前总能读取最新快照，通常落在 0 到 1 帧，调度抖动时可能接近 2 帧。外部 supervisor 只做矩阵变换并发布最新值，不应形成消息队列；portal 映射可表达为“目标门变换 × 穿门翻转 × 源门逆变换 × 当前相机”。是否真正达到目标必须由 QPC 指标实测，不能仅凭共享内存理论宣称零延迟。
+
+### 7.2 连续画面不能沿用 BMP 路径
+
+BMP 是无压缩位图；当前实现写 32-bit top-down BGRA，并每约两秒原子替换同一文件。它适合作为最终 backbuffer 访问证明，但 `GetRenderTargetData` 是同步 GPU→CPU readback，随后还要写磁盘，不是实时传输设计。
+
+CPU shared-memory 原型应使用 2 到 3 个固定 frame slot、每帧的 sequence/QPC/width/height/pitch/format 元数据，以及“只消费最新完成帧、允许丢过期帧”的策略。1600x900 BGRA 每帧约 5.76 MB，60 FPS 单向约 346 MB/s；1920x1080 每帧约 8.29 MB，单向约 498 MB/s。内存带宽本身并非必然瓶颈，但 D3D9 readback stall、额外 CPU copy、目标端 texture upload 和双向传输都可能主导延迟，所以 60 FPS 目前是待测目标，不是已证事实。Supervisor 应变换 metadata，避免再复制整张图像；M5 先做单向、较低分辨率、带 frame-age 统计的原型，再决定是否需要 GPU 共享路径。
+
+### 7.3 M3 固定相机与恢复路线
+
+plugin-sdk 已为 HOODLUM 1.0 US 提供 `CCamera::SetCamPositionForFixedMode`、`TakeControlNoEntity`、`Restore` 和 `RestoreWithJumpCut`。最小实验可以设置固定 camera source、look-at target/up offset，以 jump cut 进入 `MODE_FIXED`，退出时恢复原相机，因此不必为了观察固定地点而每次手动移动 CJ。
+
+但 gta-reversed 的 `CCam::Process_Fixed` 显示 fixed mode 每次处理都会重新计算 front/up，并把 FOV 设为 70 度；任意 FOV/姿态同步不能只在进入模式时写一次，必须在相机更新完成后、世界渲染前的稳定阶段应用，并在退出时完整恢复。另一个风险是世界 streaming：相机可以远离 CJ，但远处模型/LOD/碰撞未必已经加载。M3 应先在玩家附近验证固定 pose/FOV 与恢复，再测试远距离硬编码点并记录 streaming 缺失；这仍只是覆盖主相机的实验，最终 portal 离屏相机属于 M4。
 
 ## 8. 本次 Git 忽略规则与用户检查方法
 
@@ -280,12 +303,13 @@ plugin-sdk 的 [官方项目创建说明](https://github.com/DK22Pac/plugin-sdk/
 !/third_party/plugin-sdk/
 /third_party/plugin-sdk/*
 !/third_party/plugin-sdk/plugin-sdk/
+!/third_party/III.VC.SA.WindowedMode/
 !/reference/
 /reference/*
 !/reference/gta-reversed/
 ```
 
-结果是收录 `src/`、根目录 README/配置以及两条 submodule gitlink；`game/`、其他 `third_party/` 与 `reference/` 内容、`tools/`、`vendor/`、`.vscode/` 默认被忽略。里程碑 1 还增加了对 `src/PortalSA/bin/`、`obj/`、`.vs/` 和用户项目配置的忽略，避免构建产物进入版本控制。
+结果是收录 `src/`、根目录 README/配置以及三条 submodule gitlink；`game/`、其他 `third_party/` 与 `reference/` 内容、`tools/`、`vendor/`、`.vscode/` 默认被忽略。里程碑 1 还增加了对 `src/PortalSA/bin/`、`obj/`、`.vs/` 和用户项目配置的忽略，避免构建产物进入版本控制。
 
 用户可在 PowerShell 中检查当前登记：
 
@@ -293,11 +317,11 @@ plugin-sdk 的 [官方项目创建说明](https://github.com/DK22Pac/plugin-sdk/
 Set-Location 'D:\coding\repo\GTAPortal'
 git status --short --untracked-files=all
 git submodule status
-git ls-files --stage .gitmodules third_party/plugin-sdk/plugin-sdk reference/gta-reversed
+git ls-files --stage .gitmodules third_party/plugin-sdk/plugin-sdk third_party/III.VC.SA.WindowedMode reference/gta-reversed
 git check-ignore -- game/clean/ game/dev/ tools/ vendor/ .vscode/
 ```
 
-预期 `git submodule status` 列出两个固定 commit；`git ls-files --stage` 中两条依赖为模式 `160000`；`git check-ignore` 输出游戏和其他排除目录。规则不会自动移除已跟踪文件，今后不要用 `git add -f` 强行加入游戏目录。这个仓库配置变更无需编译或运行游戏验收。
+预期 `git submodule status` 列出三个固定 commit；`git ls-files --stage` 中三条依赖为模式 `160000`；`git check-ignore` 输出游戏和其他排除目录。规则不会自动移除已跟踪文件，今后不要用 `git add -f` 强行加入游戏目录。这个仓库配置变更无需编译或运行游戏验收。
 
 ## 附录 A：commands.txt 原文
 
