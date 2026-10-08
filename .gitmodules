@@ -1,0 +1,6 @@
+[submodule "third_party/plugin-sdk/plugin-sdk"]
+	path = third_party/plugin-sdk/plugin-sdk
+	url = https://github.com/DK22Pac/plugin-sdk.git
+[submodule "reference/gta-reversed"]
+	path = reference/gta-reversed
+	url = https://github.com/gta-reversed/gta-reversed.git

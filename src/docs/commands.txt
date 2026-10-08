@@ -1,0 +1,733 @@
+你现在接手一个跨游戏实时传送门项目 **GTAPortal**。请先完整理解下面的现状和约束，再查看仓库，不要擅自扩大 V1 范围。
+
+# 1. 项目最终目标
+
+目标是实现：
+
+**GTA V ↔ GTA San Andreas (经典 PC 版)**
+
+之间的跨进程、跨游戏实时传送门。
+
+长期设想是：
+- GTA V 世界中存在一个固定传送门，可以透视看到 GTA SA 另一侧。
+- GTA SA 世界中也存在一个固定传送门，可以透视看到 GTA V 另一侧。
+- 两个游戏是两个独立进程。
+- 需要同步 portal camera。
+- 后续可能真正实现人物穿越，并进行 gameplay authority / control handoff。
+
+但这些长期功能现在不要做。
+
+---
+
+# 2. V1 的严格范围
+
+V1 要极度简化，只做：
+
+1. 两个**硬编码固定位置**的 Portal。
+2. GTA V 和 GTA SA 两个独立进程。
+3. Portal 另一侧的**实时透视画面**。
+4. Camera transform 同步。
+5. 进程间通信可以使用共享内存。
+6. 后续真正做到画面传递时，可以通过共享内存传输 color frame / texture data。
+
+V1 明确**不做**：
+
+- 实体真正穿越
+- 玩家控制权切换
+- NPC 穿越
+- 物理交互
+- 两边世界实体同步
+- portal depth
+- stencil/depth-aware clipping 的完整实现
+- portal recursion
+- 复杂 portal placement editor
+- 任意位置动态 Portal
+- 联机
+- gameplay authority handoff
+
+当前首先只开发 **GTA SA 一侧**。
+
+不要现在碰 GTA V。
+
+---
+
+# 3. GTA SA 当前版本：已经精确确认
+在game下，有两份目前一模一样的gtasa。以后只往dev里的那一份加减东西。
+游戏 EXE：
+
+```text
+gta-sa.EXE
+```
+
+文件大小：
+
+```text
+14,383,616 bytes
+```
+
+MD5：
+
+```text
+170B3A9108687B26DA2D8901C6948A18
+```
+
+这是：
+
+```text
+GTA San Andreas PC
+1.0 US
+HOODLUM
+x86 / 32-bit
+```
+
+这就是我们目前选定的目标版本。
+
+**不要 downgrade。**
+**不要换 Compact EXE。**
+**不要修改 gta-sa.EXE。**
+因为目前很多工具都是基于
+1.0 US
+HOODLUM
+而不是compact，除了reference/下的gta-reversed,据我所知。他们是针对compact的对吧？
+你应该调查一下。
+目前这个版本游戏已经可以正常启动并游玩。
+
+游戏目录目前已知位置：
+
+```text
+D:\coding\repo\GTAPortal\game\clean\GTA San Andreas
+```
+
+---
+
+# 4. 已经解决的启动问题
+
+之前双击 GTA SA 时出现：
+
+```text
+Cannot find 1707x960x32 video mode
+```
+
+机器使用 2560×1440 显示器，Windows 150% DPI scaling：
+
+```text
+2560 / 1.5 ≈ 1707
+1440 / 1.5 = 960
+```
+
+问题已经通过 Windows 的 High DPI compatibility 设置解决。
+
+游戏目前能正常启动。
+
+不要为了修复这个问题再次修改游戏代码、分辨率逻辑或者 EXE。
+
+两份游戏我都改好了
+---
+
+# 5. 当前 ASI 加载系统已经确认
+
+游戏目录中已经存在：
+
+```text
+vorbisFile.dll
+```
+
+它的 VersionInfo：
+
+```text
+FileDescription  : Ultimate ASI Loader
+ProductName      : Ultimate-ASI-Loader-x86
+FileVersion      : 1.0.0.0
+CompanyName      : ThirteenAG
+OriginalFilename : Ultimate-ASI-Loader-x86.dll
+```
+
+所以当前 GTA SA 已经安装了：
+
+```text
+Ultimate ASI Loader x86
+```
+
+并且是通过 `vorbisFile.dll` proxy 方式加载。
+
+目录中还有：
+
+```text
+vorbisHooked.dll
+```
+
+因此大致加载链是：
+
+```text
+gta-sa.EXE
+    ↓
+vorbisFile.dll
+    ↓
+Ultimate ASI Loader x86
+    ↓
+*.asi
+```
+
+**不要再安装新的 Ultimate ASI Loader。**
+
+尤其不要下载或者覆盖：
+
+```text
+dinput8.dll
+```
+
+---
+
+# 6. DINPUT8.DLL 已确认是正常微软 DLL
+
+当前：
+
+```text
+DINPUT8.DLL
+```
+
+VersionInfo：
+
+```text
+FileDescription  : Microsoft DirectInput
+ProductName      : Microsoft® DirectX for Windows® 95 and 98
+FileVersion      : 4.08.00.0400
+CompanyName      : Microsoft Corporation
+OriginalFilename : DInput8.dll
+```
+
+SHA256：
+
+```text
+D7865FBE8319D993B8EEFF094593CB70BEA3E49F02095A308605E14F11A34353
+```
+
+不要用 ASI Loader 的 dinput8.dll 覆盖它。
+
+---
+
+# 7. 当前已有 ASI 插件
+
+游戏目录中目前有：
+
+```text
+III.VC.SA.LimitAdjuster.asi   396800 bytes
+SilentPatchSA.asi             282624 bytes
+wm_sachs.asi                  138752 bytes
+```
+
+其中：
+
+```text
+wm_sachs.asi
+```
+
+是 GTA III / VC / SA 中文汉化插件的一部分。
+
+目录还存在：
+
+```text
+wm_sachs\
+```
+
+所以当前中文大概率通过 ASI 插件 + 自己的字体/文本资源实现。
+
+---
+
+# 8. 中文环境处理原则
+
+现在游戏有中文字幕，而且已经正常游玩。
+
+主 EXE 的 MD5 与标准 1.0 US HOODLUM 精确匹配，所以汉化并没有修改主 EXE。
+
+目前不要删除中文。
+
+中文插件对第一阶段这些操作预计没有影响：
+
+- Player position
+- heading
+- CCamera
+- camera matrix
+- FOV
+- IPC
+- shared memory
+
+如果后续开始 Hook RenderWare / D3D9 渲染，出现不可解释的问题，再说
+
+但当前不要主动移除。
+
+---
+
+# 9. 游戏目录其他已知信息
+
+还有一个：
+
+```text
+gtasa_cn.exe
+```
+
+大小只有：
+
+```text
+4915 bytes
+```
+
+平时实际启动的是：
+
+```text
+gta-sa.EXE
+```
+
+不是 `gtasa_cn.exe`。
+
+`text` 目录当前至少有：
+
+```text
+american.gxt   738256
+french.gxt     798974
+german.gxt     812934
+italian.gxt    751379
+spanish.gxt    763917
+```
+
+当前已经创建了一个 GTA SA 初始存档。
+
+不要破坏这个基准环境。
+
+---
+
+# 10. 当前代码仓库
+
+在 GTAPortal 项目中已经 clone：
+
+```text
+plugin-sdk
+gta-reversed
+```
+
+**没有 clone：**
+
+```text
+sa-sdk
+```
+
+目前不要因为以前的建议而自动把它加回来，除非后续确实证明有必要。
+
+也还没有下载：
+
+```text
+ScriptHookV SDK
+```
+
+这是有意的。
+
+当前首先只完成 GTA SA 一侧。
+
+---
+
+# 11. plugin-sdk 的定位
+
+`plugin-sdk` 是当前 GTA SA 端的**主要开发依赖**。
+
+优先使用它已有的：
+
+- GTA SA classes
+- CPlayerPed
+- CCamera
+- CEntity
+- CMatrix
+- RenderWare definitions
+- events
+- injector / hooking utilities
+
+不要重新手写一套已经存在于 plugin-sdk 中的游戏结构。
+
+同时要特别注意当前游戏版本是：
+
+```text
+1.0 US HOODLUM
+```
+
+使用地址、结构或者 hook 前，必须确认 plugin-sdk 对应版本支持情况。
+
+---
+
+# 12. gta-reversed 的定位
+
+`gta-reversed` 当前只作为：
+
+**源码级 reference / reverse-engineering encyclopedia**
+
+使用。
+
+可以用来研究：
+
+- CCamera
+- camera update
+- CRenderer
+- RenderWare pipeline
+- CWorld
+- CEntity
+- CPhysical
+- Player
+- matrix
+- visibility
+- render stages
+- frame lifecycle
+
+目前：
+
+**不要 build gta-reversed。**
+**不要把 gta-reversed 生成的 DLL 注入当前 Hoodlum 游戏。**
+
+因为 gta-reversed 对 Compact EXE 有自己的严格要求，而当前正式开发目标是 Hoodlum 1.0 US。
+
+我们只阅读它的实现和结构信息。
+
+---
+
+# 13. 当前计划的基础架构
+
+未来总体结构大约是：
+
+```text
+┌────────────────────────┐
+│ GTA San Andreas x86    │
+│                        │
+│ PortalSA.asi           │
+│ - Player state         │
+│ - Camera state         │
+│ - Render hook later    │
+└───────────┬────────────┘
+            │
+            │ Shared Memory / IPC
+            │
+            ▼
+┌────────────────────────┐
+│ GTAPortal shared state │
+│                        │
+│ transforms             │
+│ camera                 │
+│ timestamps/frame ids   │
+│ later: color frames    │
+└───────────┬────────────┘
+            │
+            │ Shared Memory / IPC
+            ▼
+┌────────────────────────┐
+│ GTA V x64              │
+│                        │
+│ future plugin          │
+└────────────────────────┘
+```
+
+但 GTA V 侧现在不要实现。
+
+---
+
+# 14. IPC 原则
+
+后面需要跨进程 IPC 时，优先直接使用 Win32：
+
+```cpp
+CreateFileMapping
+OpenFileMapping
+MapViewOfFile
+```
+
+不要现在引入：
+
+- Boost.Interprocess
+- gRPC
+- sockets
+- protobuf
+- Redis
+- named pipe framework
+
+除非以后证明 shared memory 不够。
+
+GTA SA 是 x86，未来 GTA V 是 x64，所以共享结构体设计必须明确布局。
+
+例如以后可以设计：
+
+```cpp
+struct PortalState {
+    uint32_t magic;
+    uint32_t version;
+
+    float position[3];
+    float forward[3];
+    float up[3];
+
+    float fov;
+
+    uint64_t frameId;
+};
+```
+
+但现在不要急着写最终协议。
+
+---
+
+# 15. 当前第一个真正里程碑
+
+不要一开始做 Portal rendering。
+
+首先建立一个最小的 GTA SA ASI probe/plugin。
+
+第一阶段成功标准：
+
+游戏启动后 Ultimate ASI Loader 成功加载 咱们的.asi。
+
+插件能够创建：
+
+```text
+portal.log
+```
+
+然后可靠读取并周期性记录：
+
+```text
+Player/CJ position: x y z
+Player/CJ heading
+
+Camera position: x y z
+Camera forward vector
+Camera up vector（如果容易获得）
+Camera FOV
+```
+
+不建议真的每 frame flush 文件导致大量 IO。
+
+可以：
+- 每 500 ms / 1 s 输出一次；
+- 或只在 debug mode 输出；
+- 或内存中更新，每隔一段时间写日志。
+
+首先验证**数值确实随着 CJ 移动和 camera 转动正确变化**。
+
+---
+
+# 16. 第一个 milestone 完成后
+
+顺序应该是：
+
+## Milestone 1 — ASI / Memory Probe
+
+```text
+gta-sa.exe
+→ Ultimate ASI Loader
+→ PortalSA.asi
+→ plugin-sdk
+→ Player + Camera state
+→ portal.log
+```
+
+## Milestone 2 — Shared Memory
+
+将上述 Player / Camera state 写入 Win32 shared memory。
+
+然后单独写一个普通 Win32 console test program：
+
+```text
+PortalInspector.exe
+```
+
+读取 shared memory 并实时打印数据。
+
+此阶段仍然不要碰 GTA V。
+
+这样可以验证：
+
+```text
+GTA SA process
+    ↓
+shared memory
+    ↓
+independent external process
+```
+
+链路可靠。
+
+## Milestone 3 — Camera override experiment
+
+研究 GTA SA camera 能否被我们的插件以稳定方式 override。
+
+例如：
+- 设置 camera position
+- 设置 target / forward
+- 设置 FOV
+
+先证明我们可以从外部 state 驱动 GTA SA portal camera。
+
+## Milestone 4 — Rendering research
+
+然后才开始研究：
+- RenderWare
+- Direct3D9
+- offscreen render target
+- alternate camera
+- scene render timing
+- texture upload/display
+
+最终目标是在 GTA SA 中把“另一侧画面”画到一个 portal surface 上。
+
+---
+
+# 17. 非常重要：不要过早做真实 Portal
+
+当前项目风险最高的部分不是 IPC，而是：
+
+**一个游戏进程怎样获得另一游戏相机看到的实时画面，并把它低延迟地贴到 Portal 上。**
+
+最终可能涉及：
+
+```text
+Game A portal camera
+→ offscreen rendering / capture
+→ shared GPU/CPU frame
+→ IPC
+→ Game B texture
+→ portal surface
+```
+
+但是现在不要直接攻击这个问题。
+
+先逐层打通：
+
+```text
+ASI
+↓
+player/camera state
+↓
+shared memory
+↓
+external reader
+↓
+camera override
+↓
+render hook
+↓
+cross-process image
+```
+
+每一步都必须可以独立验证。
+
+---
+
+# 18. 编译环境注意事项
+
+GTA SA 是 32-bit，所以 `PortalSA.asi` 必须是：
+
+```text
+Win32 / x86
+```
+
+不能编译成 x64。
+
+请先检查当前机器/仓库中：
+- Visual Studio / MSVC 可用版本
+- plugin-sdk 的推荐 build 方式
+- 当前 plugin-sdk clone 是否包含需要的 submodules
+- 项目是否已有 CMake/premake/VS solution
+
+不要在不知道 plugin-sdk 推荐集成方式的情况下随便手写十几个 include/lib 路径。
+
+---
+
+# 19. 开发原则
+
+这个项目是实验性系统/图形项目，希望代码保持可理解。
+
+优先：
+
+- C++
+- 原生 Win32
+- plugin-sdk
+- 明确的数据结构
+- 简单 IPC
+- 小的 milestone
+- 可验证日志
+- 最少依赖
+
+避免：
+
+- 一开始引入大型框架
+- 魔法脚本
+- 过度抽象
+- 不必要 dependency
+- 一次写完整 portal system
+- 没验证就大量 hook
+- 直接改游戏 EXE
+- 把地址散落在业务代码里
+
+如果必须使用 hardcoded address：
+- 集中封装；
+- 注明对应版本；
+- 明确写 `GTA SA 1.0 US HOODLUM`；
+- 尽量先确认 plugin-sdk 是否已经提供对应接口。
+
+---
+
+# 20. Clean 与 Dev 环境原则
+
+`game/clean` 是已验证可正常玩的基准版本。
+
+不要往 clean 中不断塞测试 DLL。
+
+应该保持类似：
+
+```text
+game/
+├── clean/
+│   └── GTA San Andreas/
+│
+└── dev/
+    └── GTA San Andreas/
+```
+
+开发时只往 dev 放：
+
+```text
+PortalSA.asi
+portal.ini
+portal.log
+```
+
+以及后续必要的开发文件。
+
+如果 `dev` 当前不存在，可以建议创建，但先检查仓库。
+
+---
+
+# 21. 你现在要做的事情
+
+请先：
+
+1. Inspect 当前 `GTAPortal` repository。
+2. 找到 `plugin-sdk` 和 `gta-reversed` 的实际路径。
+3. 查看 plugin-sdk 当前推荐的 GTA SA ASI 项目创建/编译方式。
+4. 不要修改 `game/clean`。
+5. 设计一个最小 `PortalSA` Win32/x86 ASI target。
+6. 第一版代码只完成：
+   - 插件加载验证
+   - `portal.log`
+   - Player position
+   - Player heading
+   - Camera position
+   - Camera forward
+   - FOV
+7. 给出实际 build/run/test 方法。
+8. 尽量直接编译并验证；如果你具备本地执行能力，就实际执行，不要只给理论步骤。
+9. 遇到 plugin-sdk API 不确定时，优先搜索仓库源码；需要理解 GTA SA 内部逻辑时，再搜索 `gta-reversed`。
+10. 不要开始 GTA V 侧，也不要开始 cross-process framebuffer。
+
+完成第一个 milestone 后，总结：
+- 新增/修改了哪些文件；
+- 使用了哪些 plugin-sdk API；
+- 编译目标是否为 x86；
+- ASI 是否被成功加载；
+- log 中读取到哪些真实游戏数据；
+- 下一步最小任务是什么。
+
+从 inspect repository 开始。

@@ -1,0 +1,20 @@
+# Track project sources, documentation, and pinned Git submodules.
+/*
+!/.gitignore
+!/.gitmodules
+!/README.md
+!/src/
+!/third_party/
+/third_party/*
+!/third_party/plugin-sdk/
+/third_party/plugin-sdk/*
+!/third_party/plugin-sdk/plugin-sdk/
+!/reference/
+/reference/*
+!/reference/gta-reversed/
+
+# Local build output from the tracked PortalSA project.
+/src/PortalSA/bin/
+/src/PortalSA/obj/
+/src/PortalSA/.vs/
+/src/PortalSA/*.vcxproj.user
