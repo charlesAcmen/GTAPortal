@@ -7,7 +7,7 @@ GTAPortal explores a real-time portal between the classic PC releases of GTA San
 Clone the main repository together with its pinned dependencies:
 
 ```powershell
-git clone --recurse-submodules <GTAPortal-repository-URL>
+git clone --recurse-submodules https://github.com/charlesAcmen/GTAPortal.git
 Set-Location GTAPortal
 git submodule status
 ```
@@ -35,4 +35,4 @@ The local GTA SA installation is **not** part of the repository or a submodule. 
 - `.gitmodules`: dependency URLs and paths.
 - `.gitignore`: tracks project files and submodule pointers while excluding game files, local tools, and build output.
 
-There is no remote configured for this main repository yet. To clone it on another device, publish the main repository (including `.gitmodules` and the two gitlinks), then use its URL in the clone command above.
+The GitHub repository is private. Sign in to GitHub on the other device with an account that has access before cloning it.
