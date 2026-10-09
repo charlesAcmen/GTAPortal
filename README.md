@@ -1,6 +1,6 @@
 # GTAPortal
 
-GTAPortal explores a real-time portal between the classic PC releases of GTA San Andreas and GTA V. The GTA SA ASI logs player/camera state, and the existing PortalDev.exe previews the dev game's window through Windows Graphics Capture. On 2026-10-09 the game and GPU preview ran together in the dev setup. The preview does not save real-time BMPs or explicitly read image pixels back to the CPU. GTA V integration and cross-process texture delivery to a game have not started.
+GTAPortal explores a real-time portal between GTA San Andreas and GTA V Enhanced. PortalDev captures each game's window through Windows Graphics Capture without a full-frame CPU readback. It previews the SA window and publishes GTA V frames as named D3D11 shared textures in a three-slot latest-frame channel. GTA V capture runs outside the game and does not require Script Hook V. PortalV is a separate x64 Script Hook V ASI for camera state and an animated test overlay; its script entry and moving overlay were observed in Enhanced Story Mode on 2026-10-09. Game-side consumption of either image stream remains a later milestone.
 
 ## Clone on another device
 
@@ -25,6 +25,12 @@ The main repository records exact submodule commits. A regular `git pull` does n
 | `third_party/plugin-sdk/plugin-sdk` | GTA SA headers, events, hook implementation, and SDK library build | `15f15b60bbf74c106e1b496ff92c98764abf4605` |
 | `third_party/III.VC.SA.WindowedMode` | Optional dev-runtime window/borderless support for dual-monitor debugging; not linked into PortalSA | `f2f4e499a69019a47df35c77d354f8a1195db016` (`v2.2`) |
 | `reference/gta-reversed` | Read-only game implementation reference; not linked into PortalSA | `01709e8eefdf0b4871f33a8eab19dfa0716d509f` |
+| `third_party/ScriptHookVDotNetEnhanced` | Optional GTA V Enhanced .NET scripting reference; not linked into either project | `d756d479337a677cce9853b0cce63471c1fc7b7c` (`v1.1.0.6`) |
+| `third_party/ReShade` | Graphics add-on API source and examples; not installed into either game | `18deaa52de0c425a78b329e9cb3c497281cd00ec` (`v6.8.0`) |
+
+Script Hook V is distributed through [the developer's download page](https://www.dev-c.com/gtav/scripthookv/), not an official public Git source repository. On 2026-10-09 the selected Enhanced executable's file version is `1.0.1158.16`, while the installed Script Hook V DLL's file version ends in `1158.13`. Despite that metadata difference, the local Script Hook V log reports successful initialization, registers `PortalV.asi`, and launches its main thread. The user also observed PortalV's moving overlay in Story Mode. The user-supplied SDK is present locally at `third_party/ScriptHookV_SDK_1.0.617.1a/` and is ignored by Git. No Script Hook V runtime binaries are vendored here. ReShade's nested source dependencies are populated by the recursive submodule command above.
+
+For a new workstation, obtain the SDK from the Script Hook V developer and extract it as `third_party/ScriptHookV_SDK_1.0.617.1a/`. Obtain the matching runtime separately from the same official page. `ScriptHookV.dll` and its ASI loader are installed into the selected GTA V game directory by the user; PortalDev deploys only `PortalV.asi` and never redistributes the runtime.
 
 The local GTA SA installation is **not** part of the repository or a submodule. Keep your own clean copy under `game/clean/GTA San Andreas` and use `game/dev/GTA San Andreas` for plugin testing. Only the dev copy should receive `PortalSA.asi`. The project currently targets the GTA SA 1.0 US HOODLUM x86 executable; the executable and game assets must be supplied locally.
 
@@ -40,12 +46,15 @@ The second command builds the pinned upstream source as x86 and copies only its 
 ## Repository layout
 
 - `src/PortalSA/`: x86 ASI and camera probe. The earlier D3D9Ex bridge experiment remains disabled after it prevented the game from starting.
+- `src/PortalV/`: x64 Enhanced ASI for the camera and animated overlay compatibility probe.
 - `src/PortalDev/`: existing x64 development tool with Windows GPU window capture and preview.
+- `src/PortalVFrames.h`: GTA V shared-texture producer protocol for a future consumer.
 - `src/Build-Dev.ps1`: reproducible build entry that selects a complete local MSVC toolchain.
 - `src/Install-DevWindowedMode.ps1`: one-time per-workstation build/install helper for the optional windowed-mode dependency.
 - `src/config/III.VC.SA.WindowedMode.ini`: reproducible dual-monitor debug defaults (1600x900 window, no pause on focus loss).
 - `src/docs/commands.txt`: original project requirements.
 - `src/docs/PROJECT_RESOURCES.md`: resource inventory and architectural analysis.
+- `src/docs/MILESTONE_2026-10-09.md`: verified current state, observations, and next measurements.
 - `.gitmodules`: dependency URLs and paths.
 - `.gitignore`: tracks project files and submodule pointers while excluding game files, local tools, and build output.
 
