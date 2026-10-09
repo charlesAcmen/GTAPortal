@@ -12,7 +12,8 @@
 
 class VFramePublisher {
 public:
-    VFramePublisher() = default;
+    enum class Source { Sa, V };
+    explicit VFramePublisher(Source source = Source::V) : source_(source) {}
     ~VFramePublisher();
     VFramePublisher(const VFramePublisher&) = delete;
     VFramePublisher& operator=(const VFramePublisher&) = delete;
@@ -27,6 +28,7 @@ public:
     uint64_t Dropped() const { return dropped_; }
 
 private:
+    Source source_;
     struct TextureSlot {
         winrt::com_ptr<ID3D11Texture2D> texture;
         winrt::com_ptr<IDXGIKeyedMutex> mutex;

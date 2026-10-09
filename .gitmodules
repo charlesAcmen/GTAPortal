@@ -13,3 +13,15 @@
 [submodule "third_party/ReShade"]
 	path = third_party/ReShade
 	url = https://github.com/crosire/reshade.git
+[submodule "reference/universal-modder"]
+	path = reference/universal-modder
+	url = https://github.com/rehan-remade/universal-modder.git
+[submodule "reference/Gta-V-Enhanced-Minecraft-Steve-Passthrough"]
+	path = reference/Gta-V-Enhanced-Minecraft-Steve-Passthrough
+	url = https://github.com/utku6767/Gta-V-Enhanced-Minecraft-Steve-Passthrough.git
+[submodule "reference/minecraft-in-gta-enhanced"]
+	path = reference/minecraft-in-gta-enhanced
+	url = https://github.com/GrantMatas/minecraft-in-gta-enhanced.git
+[submodule "reference/SkyCraft"]
+	path = reference/SkyCraft
+	url = https://github.com/chasmlol/SkyCraft.git

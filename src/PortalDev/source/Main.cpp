@@ -386,7 +386,7 @@ void CaptureGameFrame() {
         const DWORD now = GetTickCount();
         if (g_lastCaptureAttemptTick && now - g_lastCaptureAttemptTick < 2000) return;
         g_lastCaptureAttemptTick = now;
-        if (!g_capture.Start(gameWindow, g_preview)) return;
+        if (!g_capture.Start(gameWindow, g_preview, GpuCapture::Publication::Sa)) return;
     }
     g_capture.Pump();
 }
@@ -408,7 +408,7 @@ void CaptureVFrame() {
     g_lastVCaptureAttemptTick = now;
     DWORD pid = 0;
     const HWND gameWindow = IsVRunning(&pid) ? game_process::FindVisibleWindow(pid) : nullptr;
-    if (gameWindow && g_vCapture.Start(gameWindow, g_vPreview, true)) g_vCapture.Pump();
+    if (gameWindow && g_vCapture.Start(gameWindow, g_vPreview, GpuCapture::Publication::V)) g_vCapture.Pump();
 }
 
 void UpdateText(HWND control, std::wstring& previous, const std::wstring& next, bool followTail) {
@@ -487,6 +487,9 @@ void Refresh() {
            << L"    画面：" << g_capture.Width() << L" × " << g_capture.Height() << L"\r\n"
            << L"窗口帧龄：最新 " << g_capture.LastAgeMs() << L" ms / P95 "
            << g_capture.AgeP95Ms() << L" ms    主动跳过旧帧：" << g_capture.DroppedFrames() << L"\r\n"
+           << L"SA 共享帧：发布 " << g_capture.PublishedFrames()
+           << L" / 覆盖旧帧 " << g_capture.OverwrittenFrames()
+           << L" / 跳过 " << g_capture.PublishDrops() << L"\r\n"
            << L"V 端：" << (vRunning ? L"● 运行中" : L"○ 未运行")
            << L"    ASI：" << (fs::exists(g_gtaV / L"PortalV.asi") ? L"已部署" : L"未部署")
            << L"    状态：" << (g_vConnected ? L"已连接" : L"未连接") << L"\r\n";
@@ -497,6 +500,9 @@ void Refresh() {
                << L"  状态年龄 " << g_vSnapshot.ageMs << L" ms\r\n";
     }
     status << L"V 测试画面：" << (g_vConnected && g_vSnapshot.overlayEnabled ? L"开启" : L"关闭/未连接") << L"\r\n"
+           << L"V SA 小窗：" << (fs::exists(g_gtaV / L"reshade-shaders" / L"Shaders" / L"PortalSA.fx") ? L"着色器已部署" : L"着色器未部署")
+           << L"；ReShade：" << (fs::exists(g_gtaV / L"ReShade64.asi") || fs::exists(g_gtaV / L"dxgi.dll") ? L"检测到运行库" : L"未检测到运行库")
+           << L"；Grove Street 到位后按 F9 固定画面\r\n"
            << L"V 窗口生产者：" << (g_vCaptureEnabled ? g_vCapture.Status() : L"已关闭")
            << L"    " << g_vCapture.Width() << L" × " << g_vCapture.Height()
            << L"    " << std::fixed << std::setprecision(1) << g_vCaptureFps << L" FPS\r\n"
@@ -548,6 +554,18 @@ void DeployV() {
     }
     if (!fs::exists(g_gtaV / L"ScriptHookV.dll") || !fs::exists(g_gtaV / L"dinput8.dll")) {
         ShowError(L"缺少运行库", L"游戏根目录需要 ScriptHookV.dll 和 ASI loader (dinput8.dll)。");
+        return;
+    }
+    const fs::path shaderSource = g_repo / L"src" / L"PortalV" / L"shaders" / L"PortalSA.fx";
+    if (!fs::exists(shaderSource)) {
+        ShowError(L"缺少着色器", L"找不到 src/PortalV/shaders/PortalSA.fx。");
+        return;
+    }
+    const fs::path shaderDirectory = g_gtaV / L"reshade-shaders" / L"Shaders";
+    std::error_code directoryError;
+    fs::create_directories(shaderDirectory, directoryError);
+    if (directoryError || !CopyFileW(shaderSource.c_str(), (shaderDirectory / L"PortalSA.fx").c_str(), FALSE)) {
+        ShowError(L"V 着色器部署失败", WinError());
         return;
     }
     // Compatibility is reported in the status panel; allow a manual Story Mode probe.
@@ -746,7 +764,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         AddButton(window, kOpenLog, L"打开日志");
         AddButton(window, kSelectSa, L"选择 SA 目录…");
         AddButton(window, kSelectGtaV, L"选择 GTA V 目录…");
-        AddButton(window, kDeployV, L"部署 V ASI");
+        AddButton(window, kDeployV, L"部署 V + FX");
         AddButton(window, kDisableV, L"停用 V ASI");
         AddButton(window, kOverlayV, L"切换 V 测试画面");
         AddButton(window, kOpenVLog, L"打开 V 日志");

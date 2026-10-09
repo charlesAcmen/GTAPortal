@@ -29,6 +29,7 @@ std::wstring ErrorText(HRESULT error) {
 }
 
 struct GpuCapture::Impl {
+    explicit Impl(VFramePublisher::Source source) : publisher(source) {}
     winrt::com_ptr<ID3D11Device> device;
     winrt::com_ptr<ID3D11DeviceContext> context;
     winrt::com_ptr<IDXGISwapChain1> swap;
@@ -41,7 +42,7 @@ struct GpuCapture::Impl {
     UINT swapHeight = 0;
     HWND preview = nullptr;
     LARGE_INTEGER qpcFrequency{};
-    bool publishVFrames = false;
+    GpuCapture::Publication publication = GpuCapture::Publication::None;
     VFramePublisher publisher;
 
     void EnsureSwap(UINT width, UINT height) {
@@ -71,21 +72,22 @@ struct GpuCapture::Impl {
     }
 };
 
-bool GpuCapture::Start(HWND gameWindow, HWND previewWindow, bool publishVFrames) {
+bool GpuCapture::Start(HWND gameWindow, HWND previewWindow, Publication publication) {
     Stop();
     try {
         if (!GraphicsCaptureSession::IsSupported()) {
             status_ = L"系统不支持 GPU 窗口捕获";
             return false;
         }
-        impl_ = new Impl;
+        impl_ = new Impl(publication == Publication::Sa
+            ? VFramePublisher::Source::Sa : VFramePublisher::Source::V);
         impl_->preview = previewWindow;
-        impl_->publishVFrames = publishVFrames;
+        impl_->publication = publication;
         QueryPerformanceFrequency(&impl_->qpcFrequency);
         winrt::check_hresult(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
             D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
             impl_->device.put(), nullptr, impl_->context.put()));
-        if (publishVFrames && !impl_->publisher.Start(impl_->device.get())) {
+        if (publication != Publication::None && !impl_->publisher.Start(impl_->device.get())) {
             const std::wstring error = impl_->publisher.Status();
             Stop();
             status_ = error;
@@ -137,7 +139,7 @@ bool GpuCapture::Pump() {
         winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()));
         D3D11_TEXTURE2D_DESC description{};
         texture->GetDesc(&description);
-        if (impl_->publishVFrames)
+        if (impl_->publication != Publication::None)
             impl_->publisher.Publish(impl_->context.get(), texture.get(),
                                      frame.SystemRelativeTime().count());
         if (impl_->preview) {
@@ -164,7 +166,7 @@ bool GpuCapture::Pump() {
         width_ = description.Width;
         height_ = description.Height;
         ++frames_;
-        status_ = impl_->publishVFrames ? impl_->publisher.Status() : L"GPU 窗口捕获正常";
+        status_ = impl_->publication != Publication::None ? impl_->publisher.Status() : L"GPU 窗口捕获正常";
         return true;
     } catch (const winrt::hresult_error& error) {
         Stop();

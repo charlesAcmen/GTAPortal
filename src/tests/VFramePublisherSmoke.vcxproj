@@ -16,7 +16,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(ProjectDir)bin\x64\Release\</OutDir>
-    <IntDir>$(ProjectDir)obj\x64\Release\</IntDir>
+    <IntDir>$(ProjectDir)obj\x64\PublisherSmoke\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>

@@ -1,5 +1,7 @@
 # 阶段记录：双向画面管线的生产者基础（2026-10-09）
 
+后续的 SA → GTA V 小窗候选实现见 [MILESTONE_SA_TO_V_2026-10-09.md](MILESTONE_SA_TO_V_2026-10-09.md)。以下是实现该消费者之前的阶段快照。
+
 ## 已完成
 
 | 部分 | 当前结果 | 证据边界 |
@@ -23,6 +25,8 @@ PortalV.asi ──最新状态快照──> PortalDev
 ```
 
 V 窗口捕获发生在 PortalDev 进程，独立于 `PortalV.asi`。纹理留在 GPU；生产路径没有把整帧像素读回 CPU。它目前捕获的是玩家实际看到的窗口，不是 GTA V 的离屏第二视角。共享纹理协议在 `src/PortalVFrames.h`，测试在 `src/tests/VFramePublisherSmoke.cpp`。
+
+这里的“SA 生产者”指 SA 渲染出的窗口已经被 Windows Graphics Capture 捕获，PortalDev 能实时预览；不是说 SA 画面已经发布到 GTA V 可以打开的跨进程纹理。SA 捕获目前只开启预览，V 捕获才开启三槽共享发布。两条路径及参考源码入口见 [跨游戏实例与画面链路](CROSS_GAME_REFERENCES.md)。
 
 ## 下一步验收
 

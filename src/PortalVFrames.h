@@ -6,7 +6,9 @@
 namespace portal_v_frames {
 
 constexpr wchar_t kMappingName[] = L"Local\\GTAPortal.VFrames.v1";
+constexpr wchar_t kSaMappingName[] = L"Local\\GTAPortal.SAFrames.v1";
 constexpr uint32_t kMagic = 0x31465647; // GVF1
+constexpr uint32_t kSaMagic = 0x31465347; // GSF1
 constexpr uint32_t kVersion = 1;
 constexpr int kSlotCount = 3;
 constexpr int kNameLength = 96;

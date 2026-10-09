@@ -25,6 +25,10 @@ The main repository records exact submodule commits. A regular `git pull` does n
 | `third_party/plugin-sdk/plugin-sdk` | GTA SA headers, events, hook implementation, and SDK library build | `15f15b60bbf74c106e1b496ff92c98764abf4605` |
 | `third_party/III.VC.SA.WindowedMode` | Optional dev-runtime window/borderless support for dual-monitor debugging; not linked into PortalSA | `f2f4e499a69019a47df35c77d354f8a1195db016` (`v2.2`) |
 | `reference/gta-reversed` | Read-only game implementation reference; not linked into PortalSA | `01709e8eefdf0b4871f33a8eab19dfa0716d509f` |
+| `reference/universal-modder` | Legacy GTA V + Minecraft passthrough reference | `8370faa8e114baf33acdb23079aff552a7728c4b` |
+| `reference/Gta-V-Enhanced-Minecraft-Steve-Passthrough` | Enhanced passthrough reference | `2363ee0169f3983108ff78b8dd3c464ebac96c33` |
+| `reference/minecraft-in-gta-enhanced` | Enhanced 1.0.1158.16 integration reference | `981f14ab109d7a8f57b533d4c7ea09a9a36d4255` |
+| `reference/SkyCraft` | Skyrim + Minecraft architecture comparison | `bfcaf178524b92c2cdeb88e4ce0f13ef9ded6f32` |
 | `third_party/ScriptHookVDotNetEnhanced` | Optional GTA V Enhanced .NET scripting reference; not linked into either project | `d756d479337a677cce9853b0cce63471c1fc7b7c` (`v1.1.0.6`) |
 | `third_party/ReShade` | Graphics add-on API source and examples; not installed into either game | `18deaa52de0c425a78b329e9cb3c497281cd00ec` (`v6.8.0`) |
 
@@ -46,15 +50,17 @@ The second command builds the pinned upstream source as x86 and copies only its 
 ## Repository layout
 
 - `src/PortalSA/`: x86 ASI and camera probe. The earlier D3D9Ex bridge experiment remains disabled after it prevented the game from starting.
-- `src/PortalV/`: x64 Enhanced ASI for the camera and animated overlay compatibility probe.
-- `src/PortalDev/`: existing x64 development tool with Windows GPU window capture and preview.
-- `src/PortalVFrames.h`: GTA V shared-texture producer protocol for a future consumer.
+- `src/PortalV/`: x64 Enhanced ASI with the camera probe and candidate SA→V ReShade picture plane.
+- `src/PortalDev/`: x64 development tool with WGC preview and independent SA/V shared GPU frame channels.
+- `src/PortalVFrames.h`: latest-frame, three-slot GPU texture publishing protocol for both games.
 - `src/Build-Dev.ps1`: reproducible build entry that selects a complete local MSVC toolchain.
 - `src/Install-DevWindowedMode.ps1`: one-time per-workstation build/install helper for the optional windowed-mode dependency.
 - `src/config/III.VC.SA.WindowedMode.ini`: reproducible dual-monitor debug defaults (1600x900 window, no pause on focus loss).
 - `src/docs/commands.txt`: original project requirements.
 - `src/docs/PROJECT_RESOURCES.md`: resource inventory and architectural analysis.
 - `src/docs/MILESTONE_2026-10-09.md`: verified current state, observations, and next measurements.
+- `src/docs/MILESTONE_SA_TO_V_2026-10-09.md`: SA→V candidate implementation, tests, and game acceptance steps.
+- `src/docs/CROSS_GAME_REFERENCES.md`: read-only mashup source index and a plain-language explanation of the current SA frame path.
 - `.gitmodules`: dependency URLs and paths.
 - `.gitignore`: tracks project files and submodule pointers while excluding game files, local tools, and build output.
 

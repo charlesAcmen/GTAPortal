@@ -7,7 +7,8 @@
 
 class GpuCapture {
 public:
-    bool Start(HWND gameWindow, HWND previewWindow, bool publishVFrames = false);
+    enum class Publication { None, Sa, V };
+    bool Start(HWND gameWindow, HWND previewWindow, Publication publication = Publication::None);
     bool Pump();
     void Stop();
     bool Running() const { return static_cast<bool>(gameWindow_); }

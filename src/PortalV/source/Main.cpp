@@ -9,11 +9,43 @@
 #include <cstdio>
 
 #include "../../PortalVProtocol.h"
+#include "Compositor.h"
 
 namespace {
 HMODULE g_module{};
 HANDLE g_mapping{};
 portal_v::SharedState* g_state{};
+float g_planeCenter[3]{};
+float g_planeYaw{};
+bool g_planeValid{};
+
+bool GameFilePath(const wchar_t* name, wchar_t (&path)[MAX_PATH]) {
+    if (!GetModuleFileNameW(g_module, path, MAX_PATH)) return false;
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (!slash) return false;
+    wcscpy_s(slash + 1, MAX_PATH - static_cast<size_t>(slash + 1 - path), name);
+    return true;
+}
+
+void LoadPlane() {
+    wchar_t path[MAX_PATH]{};
+    if (!GameFilePath(L"PortalVPlane.txt", path)) return;
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path, L"r") != 0 || !file) return;
+    g_planeValid = fscanf_s(file, "%f %f %f %f", &g_planeCenter[0], &g_planeCenter[1],
+                            &g_planeCenter[2], &g_planeYaw) == 4;
+    fclose(file);
+}
+
+void SavePlane() {
+    wchar_t path[MAX_PATH]{};
+    if (!GameFilePath(L"PortalVPlane.txt", path)) return;
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path, L"w") != 0 || !file) return;
+    fprintf(file, "%.6f %.6f %.6f %.6f\n", g_planeCenter[0], g_planeCenter[1],
+            g_planeCenter[2], g_planeYaw);
+    fclose(file);
+}
 
 void Log(const char* message) {
     wchar_t path[MAX_PATH]{};
@@ -61,13 +93,54 @@ void DrawTestPattern(uint64_t tick) {
 void ScriptMain() {
     Log("PortalV script started");
     OpenState();
+    LoadPlane();
     if (!g_state) Log("PortalV state mapping unavailable");
+    uint64_t nextRegister = 0;
+    bool registered = false;
+    bool previousF9 = false;
     while (true) {
         const uint64_t tick = GetTickCount64();
+        if (!registered && tick >= nextRegister) {
+            registered = portal_v::compositor::TryRegister(g_module);
+            if (registered) Log("PortalV ReShade add-on registered");
+            nextRegister = tick + 3000;
+        }
         // Native hashes are supplied by the user's Script Hook V SDK.
         const Vector3 position = invoke<Vector3>(0x14D6F5678D8F1B37);
         const Vector3 rotation = invoke<Vector3>(0x837765A25378F0BB, 2);
         const float fov = invoke<float>(0x65019750A0324133);
+        // The final camera includes GTA's rendered shake and is the depth buffer's camera.
+        const Vector3 renderedPosition = invoke<Vector3>(0xA200EB1EE790F448);
+        const Vector3 renderedRotation = invoke<Vector3>(0x5B4E4C817FCC2DFB, 2);
+        const float renderedFov = invoke<float>(0x80EC114669DAEFF4);
+        const float nearClip = invoke<float>(0xD0082607100D7193);
+        const float farClip = invoke<float>(0xDFC8CBC606FDB0FC);
+        const bool f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+        if (f9 && !previousF9 && std::isfinite(renderedPosition.x) && std::isfinite(renderedRotation.z)) {
+            const float yaw = renderedRotation.z * 0.01745329252f;
+            g_planeCenter[0] = renderedPosition.x - std::sin(yaw) * 3.0f;
+            g_planeCenter[1] = renderedPosition.y + std::cos(yaw) * 3.0f;
+            g_planeCenter[2] = renderedPosition.z;
+            g_planeYaw = renderedRotation.z;
+            g_planeValid = true;
+            SavePlane();
+            Log("PortalV SA plane anchored 3m in front of camera (F9)");
+        }
+        previousF9 = f9;
+        portal_v::compositor::Pose pose{};
+        pose.camera[0] = renderedPosition.x; pose.camera[1] = renderedPosition.y; pose.camera[2] = renderedPosition.z;
+        pose.rotation[0] = renderedRotation.x; pose.rotation[1] = renderedRotation.y; pose.rotation[2] = renderedRotation.z;
+        pose.fov = renderedFov;
+        pose.nearClip = nearClip;
+        pose.farClip = farClip;
+        pose.planeCenter[0] = g_planeCenter[0];
+        pose.planeCenter[1] = g_planeCenter[1];
+        pose.planeCenter[2] = g_planeCenter[2];
+        pose.planeYaw = g_planeYaw;
+        pose.planeValid = g_planeValid && std::isfinite(renderedFov) && renderedFov > 1.0f &&
+                          renderedFov < 179.0f && std::isfinite(nearClip) &&
+                          std::isfinite(farClip) && nearClip > 0.0f && farClip > nearClip;
+        portal_v::compositor::SetPose(pose);
         if (g_state) {
             InterlockedIncrement(&g_state->sequence);
             g_state->heartbeatTickMs = tick;
@@ -96,6 +169,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
         DisableThreadLibraryCalls(module);
         scriptRegister(module, ScriptMain);
     } else if (reason == DLL_PROCESS_DETACH) {
+        portal_v::compositor::Unregister(module);
         scriptUnregister(module);
         if (g_state) UnmapViewOfFile(g_state);
         if (g_mapping) CloseHandle(g_mapping);

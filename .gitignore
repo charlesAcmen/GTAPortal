@@ -15,6 +15,10 @@
 !/reference/
 /reference/*
 !/reference/gta-reversed/
+!/reference/universal-modder
+!/reference/Gta-V-Enhanced-Minecraft-Steve-Passthrough
+!/reference/minecraft-in-gta-enhanced
+!/reference/SkyCraft
 
 # Local build output from the tracked PortalSA project.
 /src/PortalSA/bin/

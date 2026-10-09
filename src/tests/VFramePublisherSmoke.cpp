@@ -9,7 +9,7 @@
 #include "../PortalDev/source/VFramePublisher.h"
 #include "../PortalVFrames.h"
 
-int wmain() {
+int TestChannel(VFramePublisher::Source channel) {
     winrt::com_ptr<ID3D11Device> writerDevice;
     winrt::com_ptr<ID3D11DeviceContext> writerContext;
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
@@ -29,12 +29,13 @@ int wmain() {
     winrt::com_ptr<ID3D11Texture2D> source;
     if (FAILED(writerDevice->CreateTexture2D(&description, &data, source.put()))) return 2;
 
-    VFramePublisher publisher;
+    VFramePublisher publisher(channel);
     if (!publisher.Start(writerDevice.get())) return 3;
     if (!publisher.Publish(writerContext.get(), source.get(), 123456)) return 4;
 
     HANDLE mapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE,
-                                      portal_v_frames::kMappingName);
+                                      channel == VFramePublisher::Source::Sa
+                                          ? portal_v_frames::kSaMappingName : portal_v_frames::kMappingName);
     if (!mapping) return 5;
     auto* frames = static_cast<portal_v_frames::SharedFrames*>(MapViewOfFile(
         mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(portal_v_frames::SharedFrames)));
@@ -48,7 +49,8 @@ int wmain() {
             break;
         }
     }
-    if (ready < 0 || frames->magic != portal_v_frames::kMagic) return 7;
+    if (ready < 0 || frames->magic != (channel == VFramePublisher::Source::Sa
+        ? portal_v_frames::kSaMagic : portal_v_frames::kMagic)) return 7;
 
     winrt::com_ptr<ID3D11Device> readerDevice;
     winrt::com_ptr<ID3D11DeviceContext> readerContext;
@@ -78,10 +80,21 @@ int wmain() {
 
     for (int index = 0; index < 10; ++index) publisher.Publish(writerContext.get(), source.get(), 123456 + index);
     if (publisher.Produced() < 2 || publisher.Overwritten() == 0) return 15;
-    std::printf("V shared texture smoke passed: produced=%llu overwritten=%llu\n",
+    const LONG firstGeneration = frames->generation;
+    publisher.Stop();
+    if (!publisher.Start(writerDevice.get()) || !publisher.Publish(writerContext.get(), source.get(), 123999) ||
+        frames->generation == firstGeneration) return 16;
+    std::printf("%s shared texture smoke passed: produced=%llu overwritten=%llu\n",
+                channel == VFramePublisher::Source::Sa ? "SA" : "V",
                 static_cast<unsigned long long>(publisher.Produced()),
                 static_cast<unsigned long long>(publisher.Overwritten()));
     UnmapViewOfFile(frames);
     CloseHandle(mapping);
     return 0;
+}
+
+int wmain() {
+    const int sa = TestChannel(VFramePublisher::Source::Sa);
+    if (sa) return 100 + sa;
+    return TestChannel(VFramePublisher::Source::V);
 }

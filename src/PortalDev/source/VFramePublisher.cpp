@@ -7,6 +7,19 @@
 
 namespace vf = portal_v_frames;
 
+namespace {
+volatile LONG g_generationSeed = static_cast<LONG>((GetTickCount64() ^ GetCurrentProcessId()) & 0x7fffffff);
+const wchar_t* MappingName(VFramePublisher::Source source) {
+    return source == VFramePublisher::Source::Sa ? vf::kSaMappingName : vf::kMappingName;
+}
+const wchar_t* SourceName(VFramePublisher::Source source) {
+    return source == VFramePublisher::Source::Sa ? L"SA" : L"V";
+}
+uint32_t Magic(VFramePublisher::Source source) {
+    return source == VFramePublisher::Source::Sa ? vf::kSaMagic : vf::kMagic;
+}
+}
+
 VFramePublisher::~VFramePublisher() { Stop(); }
 
 void VFramePublisher::SetError(const wchar_t* action, HRESULT result) {
@@ -18,9 +31,11 @@ void VFramePublisher::SetError(const wchar_t* action, HRESULT result) {
 
 bool VFramePublisher::Start(ID3D11Device* device) {
     Stop();
+    // A capture restart in the same process must not reuse the previous generation.
+    generation_ = InterlockedIncrement(&g_generationSeed);
     device_.copy_from(device);
     mapping_ = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
-                                  sizeof(vf::SharedFrames), vf::kMappingName);
+                                  sizeof(vf::SharedFrames), MappingName(source_));
     if (!mapping_) {
         SetError(L"V 帧控制区创建失败", HRESULT_FROM_WIN32(GetLastError()));
         Stop();
@@ -49,8 +64,8 @@ bool VFramePublisher::Start(ID3D11Device* device) {
     shared_->adapterLuidLow = description.AdapterLuid.LowPart;
     shared_->adapterLuidHigh = description.AdapterLuid.HighPart;
     MemoryBarrier();
-    shared_->magic = vf::kMagic;
-    status_ = L"等待 GTA V 首帧";
+    shared_->magic = Magic(source_);
+    status_ = std::wstring(L"等待 ") + SourceName(source_) + L" 首帧";
     return true;
 }
 
@@ -69,7 +84,7 @@ void VFramePublisher::ReleaseSlots() {
 bool VFramePublisher::CreateSlots(UINT width, UINT height) {
     ReleaseSlots();
     if (!width || !height) return false;
-    ++generation_;
+    if (++generation_ == 0) ++generation_;
     D3D11_TEXTURE2D_DESC description{};
     description.Width = width;
     description.Height = height;
@@ -87,8 +102,8 @@ bool VFramePublisher::CreateSlots(UINT width, UINT height) {
         if (SUCCEEDED(result)) {
             slot.mutex = slot.texture.as<IDXGIKeyedMutex>();
             wchar_t name[vf::kNameLength]{};
-            swprintf_s(name, L"Local\\GTAPortal.V.%lu.%llu.%ld.%d",
-                       GetCurrentProcessId(), static_cast<unsigned long long>(GetTickCount64()),
+            swprintf_s(name, L"Local\\GTAPortal.%s.%lu.%llu.%ld.%d",
+                       SourceName(source_), GetCurrentProcessId(), static_cast<unsigned long long>(GetTickCount64()),
                        generation_, index);
             result = slot.texture.as<IDXGIResource1>()->CreateSharedHandle(
                 nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
@@ -193,7 +208,7 @@ bool VFramePublisher::Publish(ID3D11DeviceContext* context, ID3D11Texture2D* sou
     InterlockedExchange(&metadata.state, vf::kReady);
     ++produced_;
     InterlockedIncrement(&shared_->produced);
-    status_ = L"V GPU 帧发布正常";
+    status_ = std::wstring(SourceName(source_)) + L" GPU 帧发布正常";
     return true;
 }
 
