@@ -7,3 +7,9 @@
 [submodule "third_party/III.VC.SA.WindowedMode"]
 	path = third_party/III.VC.SA.WindowedMode
 	url = https://github.com/ThirteenAG/III.VC.SA.WindowedMode.git
+[submodule "third_party/ScriptHookVDotNetEnhanced"]
+	path = third_party/ScriptHookVDotNetEnhanced
+	url = https://github.com/Chiheb-Bacha/ScriptHookVDotNetEnhanced.git
+[submodule "third_party/ReShade"]
+	path = third_party/ReShade
+	url = https://github.com/crosire/reshade.git
