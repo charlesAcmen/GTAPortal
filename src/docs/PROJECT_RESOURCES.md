@@ -2,7 +2,7 @@
 
 调查日期：2026-10-08（Asia/Shanghai）。本文件最初汇总本地只读检查、公开项目资料和设计判断；初始调查阶段没有编译、启动游戏、安装依赖或验证游戏内行为，后续构建状态见下方更新段落。
 
-后续里程碑 1 已写入 `src/PortalSA/`：x86 ASI 项目、状态日志和定期最终画面 BMP；另有外部 `PortalDev.exe` 负责构建入口、dev 部署、启动、日志和抓帧状态。2026-10-08 两者已在本机成功编译，用户已在真实游戏中验收注入、相机/玩家日志、周期 BMP 和双屏窗口化工作流，M1 完成。plugin-sdk、gta-reversed 与开发运行依赖 III.VC.SA.WindowedMode 均登记为固定 commit 的 Git submodule。下文保留部分调查写作时的资源快照，涉及“尚无 PortalSA 源码”等叙述以本段更新为准。
+后续里程碑 1 已写入 `src/PortalSA/`：x86 ASI 项目、状态日志和定期最终画面 BMP；另有外部 `PortalDev.exe` 负责构建入口、dev 部署、日志和抓帧状态。2026-10-08 两者已在本机成功编译，用户已在真实游戏中验收注入、相机/玩家日志、周期 BMP 和双屏窗口化工作流，M1 完成。2026-10-09 又验证了保留 GTA SA 原生 D3D9 设备、由 PortalDev 使用 Windows Graphics Capture 捕获游戏窗口并通过 GPU 预览的链路。旧 D3D9Ex 共享纹理实验使游戏启动时崩溃，现已停用；当前工作路径不保存实时 BMP，也尚未完成跨进程 GPU 纹理发布。plugin-sdk、gta-reversed 与开发运行依赖 III.VC.SA.WindowedMode 均登记为固定 commit 的 Git submodule。下文保留部分调查写作时的资源快照，涉及旧阶段叙述以本段和两项目 README 为准。
 
 ## 1. 本次范围和结论
 

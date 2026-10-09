@@ -1,6 +1,6 @@
 # GTAPortal
 
-GTAPortal explores a real-time portal between the classic PC releases of GTA San Andreas and GTA V. **Milestone 1 on the GTA SA side is complete**: a Win32 ASI reads player/camera state and periodically saves the final D3D9 frame, while an external development dashboard manages the build/deploy/test loop. On 2026-10-08 the user verified real in-game state logs, repeatedly updated BMP captures, and dual-monitor windowed operation. The next milestone is lock-free camera/state IPC; GTA V integration and continuous frame transport have not started.
+GTAPortal explores a real-time portal between the classic PC releases of GTA San Andreas and GTA V. The GTA SA ASI logs player/camera state, and the existing PortalDev.exe previews the dev game's window through Windows Graphics Capture. On 2026-10-09 the game and GPU preview ran together in the dev setup. The preview does not save real-time BMPs or explicitly read image pixels back to the CPU. GTA V integration and cross-process texture delivery to a game have not started.
 
 ## Clone on another device
 
@@ -39,8 +39,8 @@ The second command builds the pinned upstream source as x86 and copies only its 
 
 ## Repository layout
 
-- `src/PortalSA/`: milestone 1 x86 ASI source and Visual Studio project.
-- `src/PortalDev/`: external development dashboard for build, deployment, launch, logs, and capture status.
+- `src/PortalSA/`: x86 ASI and camera probe. The earlier D3D9Ex bridge experiment remains disabled after it prevented the game from starting.
+- `src/PortalDev/`: existing x64 development tool with Windows GPU window capture and preview.
 - `src/Build-Dev.ps1`: reproducible build entry that selects a complete local MSVC toolchain.
 - `src/Install-DevWindowedMode.ps1`: one-time per-workstation build/install helper for the optional windowed-mode dependency.
 - `src/config/III.VC.SA.WindowedMode.ini`: reproducible dual-monitor debug defaults (1600x900 window, no pause on focus loss).
