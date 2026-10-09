@@ -118,6 +118,7 @@
   <ItemGroup>
     <ClCompile Include="source\D3D9ExBridge.cpp" />
     <ClCompile Include="source\Main.cpp" />
+    <ClCompile Include="source\StateCapture.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

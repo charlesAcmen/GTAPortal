@@ -18,51 +18,17 @@
 #include <safetyhook.hpp>
 
 #include "D3D9ExBridge.h"
+#include "StateCapture.h"
 #include "../../PortalProtocol.h"
 
 namespace {
 
-constexpr DWORD kStateLogIntervalMs = 100;
 constexpr DWORD kErrorLogIntervalMs = 5000;
 // GTA SA 1.0 US HOODLUM; plugin-sdk uses this address in RenderWare.cpp.
 constexpr uintptr_t kShowRasterAddress = 0x7EE370;
 
-struct Vec3 {
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
-};
-
-Vec3 Copy(const CVector& value) {
-    return {value.x, value.y, value.z};
-}
-
-struct State {
-    DWORD tick = 0;
-    bool playerValid = false;
-    bool cameraValid = false;
-    bool velocityFromVehicle = false;
-    Vec3 playerPosition;
-    Vec3 playerVelocity;
-    float playerHeading = 0.0f;
-    Vec3 cameraPosition;
-    Vec3 cameraForward;
-    Vec3 cameraUp;
-    float fovDegrees = 0.0f;
-    float nearClip = 0.0f;
-    float farClip = 0.0f;
-    float viewWindowX = 0.0f;
-    float viewWindowY = 0.0f;
-    unsigned cameraIndex = 0;
-};
-
-State g_state;
-std::array<float, 16> g_viewMatrix{};
-std::array<float, 16> g_projectionMatrix{};
-DWORD g_renderMatrixTick = 0;
-uint64_t g_renderMatrixSerial = 0;
+using namespace portal_sa::state;
 uint64_t g_lastPublishedMatrixSerial = 0;
-DWORD g_lastStateLogTick = 0;
 DWORD g_lastErrorLogTick = 0;
 bool g_initialized = false;
 bool g_supported = false;
@@ -130,118 +96,12 @@ bool Initialize() {
     return g_supported;
 }
 
-const char* Phase(bool playerValid) {
-    if (CLoadingScreen::m_bActive) {
-        return "loading";
-    }
-    if (FrontEndMenuManager.m_bMenuActive) {
-        return "menu_or_pause";
-    }
-    if (CCutsceneMgr::ms_running) {
-        return "cutscene";
-    }
-    return playerValid ? "gameplay" : "no_player";
-}
-
-void AppendVec(std::ostringstream& line, const char* name, Vec3 value) {
-    line << ' ' << name << "=(" << value.x << ',' << value.y << ',' << value.z << ')';
-}
-
-void AppendMatrix(std::ostringstream& line, const char* name, const std::array<float, 16>& matrix) {
-    line << ' ' << name << "=[";
-    for (size_t index = 0; index < matrix.size(); ++index) {
-        if (index) {
-            line << ',';
-        }
-        line << matrix[index];
-    }
-    line << ']';
-}
-
 void OnGameProcess() {
-    if (!Initialize()) {
-        return;
-    }
-
-    const DWORD now = GetTickCount();
-    State state;
-    state.tick = now;
-    if (CPlayerPed* player = FindPlayerPed(0)) {
-        state.playerValid = true;
-        state.playerPosition = Copy(player->GetPosition());
-        if (player->bInVehicle && player->m_pVehicle) {
-            state.velocityFromVehicle = true;
-            state.playerHeading = player->m_pVehicle->GetHeading();
-            state.playerVelocity = Copy(player->m_pVehicle->m_vecMoveSpeed);
-        } else {
-            state.playerHeading = player->GetHeading();
-            state.playerVelocity = Copy(player->m_vecMoveSpeed);
-        }
-    }
-
-    if (RwCamera* rwCamera = TheCamera.m_pRwCamera) {
-        const CMatrix& matrix = TheCamera.m_mCameraMatrix;
-        state.cameraValid = true;
-        state.cameraPosition = Copy(matrix.pos);
-        // CMatrix maps forward to its up field and up to its at field.
-        state.cameraForward = Copy(matrix.GetForward());
-        state.cameraUp = Copy(matrix.GetUp());
-        state.cameraIndex = TheCamera.m_nActiveCam;
-        if (state.cameraIndex < 3) {
-            state.fovDegrees = TheCamera.m_aCams[state.cameraIndex].m_fFOV;
-        }
-        state.nearClip = RwCameraGetNearClipPlane(rwCamera);
-        state.farClip = RwCameraGetFarClipPlane(rwCamera);
-        if (const RwV2d* window = RwCameraGetViewWindow(rwCamera)) {
-            state.viewWindowX = window->x;
-            state.viewWindowY = window->y;
-        }
-    }
-    g_state = state;
-
-    if (g_lastStateLogTick && now - g_lastStateLogTick < kStateLogIntervalMs) {
-        return;
-    }
-    g_lastStateLogTick = now;
-
-    std::ostringstream line;
-    line << std::fixed << std::setprecision(4);
-    line << "state tick_ms=" << now << " phase=" << Phase(state.playerValid)
-         << " player_valid=" << state.playerValid << " camera_valid=" << state.cameraValid;
-    if (state.playerValid) {
-        AppendVec(line, "player_position", state.playerPosition);
-        line << " player_heading_rad=" << state.playerHeading;
-        AppendVec(line, "player_move_speed_per_tick", state.playerVelocity);
-        line << " velocity_source=" << (state.velocityFromVehicle ? "vehicle" : "ped");
-    }
-    if (state.cameraValid) {
-        AppendVec(line, "camera_position", state.cameraPosition);
-        AppendVec(line, "camera_forward", state.cameraForward);
-        AppendVec(line, "camera_up", state.cameraUp);
-        line << " camera_index=" << state.cameraIndex << " camera_fov_deg=" << state.fovDegrees
-             << " near=" << state.nearClip << " far=" << state.farClip
-             << " view_window=(" << state.viewWindowX << ',' << state.viewWindowY << ')';
-    }
-    if (g_renderMatrixTick && now - g_renderMatrixTick < 1000) {
-        line << " render_matrix_age_ms=" << now - g_renderMatrixTick;
-        AppendMatrix(line, "render_view_row_major", g_viewMatrix);
-        AppendMatrix(line, "render_projection_row_major", g_projectionMatrix);
-    }
-    Log(line.str());
+    if (Initialize()) portal_sa::state::OnGameProcess(Log);
 }
 
 void OnRenderScene() {
-    if (!g_supported) {
-        return;
-    }
-    const _D3DMATRIX* view = GetD3DViewTransform();
-    const _D3DMATRIX* projection = GetD3DProjTransform();
-    if (view && projection) {
-        std::memcpy(g_viewMatrix.data(), view, sizeof(_D3DMATRIX));
-        std::memcpy(g_projectionMatrix.data(), projection, sizeof(_D3DMATRIX));
-        g_renderMatrixTick = GetTickCount();
-        ++g_renderMatrixSerial;
-    }
+    if (g_supported) portal_sa::state::OnRenderScene();
 }
 
 int64_t Qpc() {

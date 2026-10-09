@@ -27,3 +27,12 @@
 /src/PortalDev/obj/
 /src/PortalDev/.vs/
 /src/PortalDev/*.vcxproj.user
+
+# Local GTA V plugin build output.
+/src/PortalV/bin/
+/src/PortalV/obj/
+/src/PortalV/.vs/
+/src/PortalV/*.vcxproj.user
+
+/src/tests/bin/
+/src/tests/obj/

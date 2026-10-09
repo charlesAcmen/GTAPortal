@@ -10,6 +10,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 $sdk = Join-Path $repo 'third_party\plugin-sdk\plugin-sdk'
 $portalProject = Join-Path $repo 'src\PortalSA\PortalSA.vcxproj'
 $toolProject = Join-Path $repo 'src\PortalDev\PortalDev.vcxproj'
+$portalVProject = Join-Path $repo 'src\PortalV\PortalV.vcxproj'
 $sdkProject = Join-Path $sdk 'plugin_sa\Plugin_SA.vcxproj'
 $sdkLibrary = Join-Path $sdk 'output\lib\Plugin.lib'
 
@@ -74,6 +75,11 @@ elseif (-not $SkipSdk) {
 if ($LASTEXITCODE -ne 0) { throw "PortalSA build failed with exit code $LASTEXITCODE" }
 
 if (-not $SkipTool) {
+    & $toolchain.MSBuild $portalVProject `
+        '/p:Configuration=Release' '/p:Platform=x64' `
+        "/p:PlatformToolset=$($toolchain.Toolset)" '/m' '/v:minimal'
+    if ($LASTEXITCODE -ne 0) { throw "PortalV build failed with exit code $LASTEXITCODE" }
+
     & $toolchain.MSBuild $toolProject `
         '/p:Configuration=Release' '/p:Platform=x64' `
         "/p:PlatformToolset=$($toolchain.Toolset)" '/m' '/v:minimal'
@@ -84,6 +90,7 @@ Write-Host ''
 Write-Host 'Build complete:'
 Get-Item -LiteralPath `
     (Join-Path $repo 'src\PortalSA\bin\GTA-SA\Release\PortalSA.asi'), `
+    (Join-Path $repo 'src\PortalV\bin\x64\Release\PortalV.asi'), `
     (Join-Path $repo 'src\PortalDev\bin\x64\Release\PortalDev.exe') `
     -ErrorAction SilentlyContinue |
     Select-Object FullName, Length, LastWriteTime

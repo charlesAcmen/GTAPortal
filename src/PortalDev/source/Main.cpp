@@ -1,10 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <bcrypt.h>
 #include <d3d9.h>
 #include <shellapi.h>
-#include <tlhelp32.h>
 #include <winrt/base.h>
 
 #include <algorithm>
@@ -18,13 +16,15 @@
 
 #include "../../PortalProtocol.h"
 #include "GpuCapture.h"
+#include "GamePaths.h"
+#include "GameProcess.h"
+#include "PortalVClient.h"
 
 namespace fs = std::filesystem;
 
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"GTAPortalDevWindow";
-constexpr wchar_t kExpectedMd5[] = L"170B3A9108687B26DA2D8901C6948A18";
 constexpr UINT_PTR kRefreshTimer = 1;
 constexpr UINT_PTR kFrameTimer = 2;
 
@@ -37,6 +37,13 @@ enum ControlId : int {
     kOpenLog = 1006,
     kDisable = 1009,
     kGpuMode = 1010,
+    kSelectSa = 1011,
+    kSelectGtaV = 1012,
+    kDeployV = 1013,
+    kDisableV = 1014,
+    kOverlayV = 1015,
+    kOpenVLog = 1016,
+    kVCaptureMode = 1017,
 };
 
 HINSTANCE g_instance{};
@@ -44,7 +51,9 @@ HWND g_window{};
 HWND g_status{};
 HWND g_logView{};
 HWND g_preview{};
+HWND g_vPreview{};
 HWND g_gpuMode{};
+HWND g_vGpuMode{};
 HFONT g_uiFont{};
 HFONT g_monoFont{};
 fs::path g_repo;
@@ -55,6 +64,14 @@ fs::path g_disabledAsi;
 fs::path g_log;
 fs::path g_game;
 std::wstring g_gameMd5;
+bool g_saValid{};
+fs::path g_gtaV;
+std::wstring g_gtaVVersion;
+bool g_gtaVValid{};
+fs::path g_sourceVAsi;
+PortalVClient g_vClient;
+PortalVClient::Snapshot g_vSnapshot;
+bool g_vConnected{};
 HANDLE g_mapping{};
 HANDLE g_supervisorMutex{};
 portal::SharedFrames* g_frames{};
@@ -89,10 +106,15 @@ int g_scrollY{};
 std::wstring g_statusText;
 std::wstring g_logText;
 GpuCapture g_capture;
+GpuCapture g_vCapture;
 bool g_captureEnabled = true;
+bool g_vCaptureEnabled = true;
 DWORD g_lastCaptureAttemptTick{};
+DWORD g_lastVCaptureAttemptTick{};
 uint64_t g_lastCaptureFrames{};
+uint64_t g_lastVCaptureFrames{};
 double g_captureFps{};
+double g_vCaptureFps{};
 
 std::wstring WinError(DWORD code = GetLastError()) {
     wchar_t* buffer = nullptr;
@@ -113,123 +135,13 @@ void ShowError(const std::wstring& title, const std::wstring& message) {
     MessageBoxW(g_window, message.c_str(), title.c_str(), MB_OK | MB_ICONERROR);
 }
 
-fs::path FindRepoRoot() {
-    std::array<wchar_t, 32768> path{};
-    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (!length || length == path.size()) {
-        return {};
-    }
-    fs::path cursor = fs::path(path.data()).parent_path();
-    for (int depth = 0; depth < 10; ++depth) {
-        if (fs::exists(cursor / L"src" / L"PortalSA" / L"PortalSA.vcxproj")) {
-            return cursor;
-        }
-        if (!cursor.has_parent_path() || cursor.parent_path() == cursor) {
-            break;
-        }
-        cursor = cursor.parent_path();
-    }
-    return {};
-}
-
-std::wstring HashMd5(const fs::path& path) {
-    BCRYPT_ALG_HANDLE algorithm = nullptr;
-    BCRYPT_HASH_HANDLE hash = nullptr;
-    DWORD objectBytes = 0;
-    DWORD hashBytes = 0;
-    DWORD resultBytes = 0;
-    std::vector<unsigned char> object;
-    std::vector<unsigned char> digest;
-    std::wstring result;
-
-    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_MD5_ALGORITHM, nullptr, 0) < 0 ||
-        BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
-                          reinterpret_cast<PUCHAR>(&objectBytes), sizeof(objectBytes),
-                          &resultBytes, 0) < 0 ||
-        BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH,
-                          reinterpret_cast<PUCHAR>(&hashBytes), sizeof(hashBytes),
-                          &resultBytes, 0) < 0) {
-        if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
-        return {};
-    }
-
-    object.resize(objectBytes);
-    digest.resize(hashBytes);
-    if (BCryptCreateHash(algorithm, &hash, object.data(), objectBytes, nullptr, 0, 0) < 0) {
-        BCryptCloseAlgorithmProvider(algorithm, 0);
-        return {};
-    }
-
-    std::ifstream input(path, std::ios::binary);
-    std::array<char, 1 << 16> buffer{};
-    while (input) {
-        input.read(buffer.data(), buffer.size());
-        const auto count = input.gcount();
-        if (count > 0 &&
-            BCryptHashData(hash, reinterpret_cast<PUCHAR>(buffer.data()),
-                           static_cast<ULONG>(count), 0) < 0) {
-            result.clear();
-            break;
-        }
-    }
-
-    if (input.eof() && BCryptFinishHash(hash, digest.data(), hashBytes, 0) >= 0) {
-        std::wostringstream text;
-        text << std::uppercase << std::hex << std::setfill(L'0');
-        for (const unsigned char byte : digest) {
-            text << std::setw(2) << static_cast<unsigned>(byte);
-        }
-        result = text.str();
-    }
-
-    BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(algorithm, 0);
-    return result;
-}
-
 bool IsGameRunning(DWORD* gamePid = nullptr) {
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-    PROCESSENTRY32W entry{};
-    entry.dwSize = sizeof(entry);
-    bool found = false;
-    if (Process32FirstW(snapshot, &entry)) {
-        do {
-            if (_wcsicmp(entry.szExeFile, L"gta-sa.exe") == 0) {
-                HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
-                if (process) {
-                    std::array<wchar_t, 32768> path{};
-                    DWORD length = static_cast<DWORD>(path.size());
-                    found = QueryFullProcessImageNameW(process, 0, path.data(), &length) &&
-                        _wcsicmp(path.data(), g_game.c_str()) == 0;
-                    CloseHandle(process);
-                    if (found) {
-                        if (gamePid) *gamePid = entry.th32ProcessID;
-                        break;
-                    }
-                }
-            }
-        } while (Process32NextW(snapshot, &entry));
-    }
-    CloseHandle(snapshot);
-    return found;
+    return game_process::FindByExecutablePath(g_game, gamePid);
 }
 
-HWND FindGameWindow(DWORD gamePid) {
-    struct Search { DWORD pid; HWND window; } search{gamePid, nullptr};
-    EnumWindows([](HWND window, LPARAM parameter) -> BOOL {
-        auto& search = *reinterpret_cast<Search*>(parameter);
-        DWORD pid = 0;
-        GetWindowThreadProcessId(window, &pid);
-        if (pid == search.pid && IsWindowVisible(window) && GetWindow(window, GW_OWNER) == nullptr) {
-            search.window = window;
-            return FALSE;
-        }
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&search));
-    return search.window;
+bool IsVRunning(DWORD* gamePid = nullptr) {
+    return g_gtaVValid && game_process::FindByExecutablePath(
+        g_gtaV / L"GTA5_Enhanced.exe", gamePid);
 }
 
 std::string ReadTailBytes(const fs::path& path, size_t maximum = 96 * 1024) {
@@ -276,7 +188,7 @@ bool SameFile(const fs::path& left, const fs::path& right) {
     const auto leftSize = fs::file_size(left, errorLeft);
     const auto rightSize = fs::file_size(right, errorRight);
     return !errorLeft && !errorRight && leftSize == rightSize &&
-           HashMd5(left) == HashMd5(right);
+           game_paths::HashMd5(left) == game_paths::HashMd5(right);
 }
 
 bool StartSupervisor() {
@@ -464,7 +376,7 @@ void CaptureGameFrame() {
         return;
     }
     DWORD pid = 0;
-    const HWND gameWindow = IsGameRunning(&pid) ? FindGameWindow(pid) : nullptr;
+    const HWND gameWindow = IsGameRunning(&pid) ? game_process::FindVisibleWindow(pid) : nullptr;
     if (!gameWindow) {
         g_capture.Stop();
         return;
@@ -477,6 +389,26 @@ void CaptureGameFrame() {
         if (!g_capture.Start(gameWindow, g_preview)) return;
     }
     g_capture.Pump();
+}
+
+void CaptureVFrame() {
+    if (!g_vCaptureEnabled || !g_gtaVValid) {
+        g_vCapture.Stop();
+        return;
+    }
+    if (g_vCapture.Running()) {
+        if (IsWindow(g_vCapture.GameWindow())) {
+            g_vCapture.Pump();
+            return;
+        }
+        g_vCapture.Stop();
+    }
+    const DWORD now = GetTickCount();
+    if (g_lastVCaptureAttemptTick && now - g_lastVCaptureAttemptTick < 500) return;
+    g_lastVCaptureAttemptTick = now;
+    DWORD pid = 0;
+    const HWND gameWindow = IsVRunning(&pid) ? game_process::FindVisibleWindow(pid) : nullptr;
+    if (gameWindow && g_vCapture.Start(gameWindow, g_vPreview, true)) g_vCapture.Pump();
 }
 
 void UpdateText(HWND control, std::wstring& previous, const std::wstring& next, bool followTail) {
@@ -498,6 +430,7 @@ void UpdateText(HWND control, std::wstring& previous, const std::wstring& next, 
 }
 
 void Refresh() {
+    if (!g_gtaV.empty()) g_gtaVValid = game_paths::ValidateGtaVDirectory(g_gtaV, g_gtaVVersion);
     if (g_ageCount) {
         std::vector<double> ages(g_ageSamples.begin(), g_ageSamples.begin() + g_ageCount);
         const size_t index = (95 * g_ageCount + 99) / 100 - 1;
@@ -509,13 +442,22 @@ void Refresh() {
         const double seconds = static_cast<double>(now - g_lastRefreshQpc) / g_qpcFrequency.QuadPart;
         if (seconds > 0) {
             g_captureFps = (g_capture.Frames() - g_lastCaptureFrames) / seconds;
+            g_vCaptureFps = (g_vCapture.Frames() - g_lastVCaptureFrames) / seconds;
         }
     }
     g_lastRefreshQpc = now;
     g_lastProduced = g_frames->produced;
     g_lastReceived = g_received;
     g_lastCaptureFrames = g_capture.Frames();
+    g_lastVCaptureFrames = g_vCapture.Frames();
     const bool running = IsGameRunning();
+    DWORD vPid = 0;
+    const bool vRunning = IsVRunning(&vPid);
+    g_vConnected = g_vClient.Read(g_vSnapshot) && vRunning && g_vSnapshot.processId == vPid;
+    if (!g_vConnected) g_vClient.Disconnect();
+    std::wstring vHookVersion;
+    const bool vHookMatches = g_gtaVValid &&
+        game_paths::ValidateGtaVHookVersion(g_gtaV, g_gtaVVersion, vHookVersion);
     const bool sourceReady = fs::exists(g_sourceAsi);
     const bool deployed = fs::exists(g_deployedAsi);
     const bool matching = sourceReady && deployed && SameFile(g_sourceAsi, g_deployedAsi);
@@ -523,8 +465,15 @@ void Refresh() {
     const std::string logBytes = ReadTailBytes(g_log);
 
     std::wostringstream status;
-    status << L"游戏版本：" << (g_gameMd5 == kExpectedMd5 ? L"✓ HOODLUM 1.0 US" : L"✗ 未识别")
+    status << L"SA 版本：" << (g_saValid ? L"✓ HOODLUM 1.0 US" : L"✗ 未识别")
            << L"    MD5: " << (g_gameMd5.empty() ? L"读取失败" : g_gameMd5) << L"\r\n"
+           << L"SA 目录：" << g_dev.wstring() << L"\r\n"
+           << L"GTA V Enhanced：" << (g_gtaVValid ? L"✓ " + g_gtaVVersion : L"✗ 未选择或无效")
+           << L"    目录：" << (g_gtaV.empty() ? L"未选择" : g_gtaV.wstring()) << L"\r\n"
+           << L"Script Hook V：" << (vHookVersion.empty() ? L"未安装/无法读取版本" : vHookVersion)
+           << L"    文件版本："
+           << (vHookMatches ? L"一致" : g_vConnected ? L"不同，但 ASI 正在运行" : L"不同，需实测")
+           << L"\r\n"
            << L"ASI 构建：" << (sourceReady ? L"✓ " : L"✗ ")
            << (sourceReady ? SizeText(g_sourceAsi) : L"尚未生成")
            << L"    dev 部署：" << (matching ? L"✓ 已同步" : deployed ? L"△ 版本可能不同" : L"✗ 未部署")
@@ -536,6 +485,24 @@ void Refresh() {
            << L"捕获帧数：" << g_capture.Frames()
            << L"    捕获速度：" << std::fixed << std::setprecision(1) << g_captureFps << L" FPS"
            << L"    画面：" << g_capture.Width() << L" × " << g_capture.Height() << L"\r\n"
+           << L"窗口帧龄：最新 " << g_capture.LastAgeMs() << L" ms / P95 "
+           << g_capture.AgeP95Ms() << L" ms    主动跳过旧帧：" << g_capture.DroppedFrames() << L"\r\n"
+           << L"V 端：" << (vRunning ? L"● 运行中" : L"○ 未运行")
+           << L"    ASI：" << (fs::exists(g_gtaV / L"PortalV.asi") ? L"已部署" : L"未部署")
+           << L"    状态：" << (g_vConnected ? L"已连接" : L"未连接") << L"\r\n";
+    if (g_vConnected) {
+        status << L"V 相机：(" << g_vSnapshot.cameraPosition[0] << L", "
+               << g_vSnapshot.cameraPosition[1] << L", " << g_vSnapshot.cameraPosition[2]
+               << L") FOV " << g_vSnapshot.fovDegrees << L"  帧 " << g_vSnapshot.frameId
+               << L"  状态年龄 " << g_vSnapshot.ageMs << L" ms\r\n";
+    }
+    status << L"V 测试画面：" << (g_vConnected && g_vSnapshot.overlayEnabled ? L"开启" : L"关闭/未连接") << L"\r\n"
+           << L"V 窗口生产者：" << (g_vCaptureEnabled ? g_vCapture.Status() : L"已关闭")
+           << L"    " << g_vCapture.Width() << L" × " << g_vCapture.Height()
+           << L"    " << std::fixed << std::setprecision(1) << g_vCaptureFps << L" FPS\r\n"
+           << L"V 共享帧：发布 " << g_vCapture.PublishedFrames()
+           << L" / 覆盖旧帧 " << g_vCapture.OverwrittenFrames()
+           << L" / 跳过 " << g_vCapture.PublishDrops() << L"\r\n"
            << L"相机元数据：见下方 PortalSA 日志"
            << L"\r\n仓库：" << g_repo.wstring();
     UpdateText(g_status, g_statusText, status.str(), false);
@@ -549,7 +516,7 @@ bool Deploy() {
         ShowError(L"无法部署", L"请先关闭 GTA San Andreas，再替换 PortalSA.asi。");
         return false;
     }
-    if (g_gameMd5 != kExpectedMd5) {
+    if (!g_saValid) {
         ShowError(L"版本检查失败", L"dev 目录中的 gta-sa.EXE 不是已确认的 HOODLUM 1.0 US，已阻止部署。");
         return false;
     }
@@ -563,6 +530,100 @@ bool Deploy() {
     }
     Refresh();
     return true;
+}
+
+void DeployV() {
+    std::wstring version;
+    if (!game_paths::ValidateGtaVDirectory(g_gtaV, version)) {
+        ShowError(L"V 版本检查失败", L"请选择有效的 GTA V Enhanced 游戏根目录。");
+        return;
+    }
+    if (IsVRunning()) {
+        ShowError(L"请先关闭 GTA V", L"游戏运行时不能替换 PortalV.asi。");
+        return;
+    }
+    if (!fs::exists(g_sourceVAsi)) {
+        ShowError(L"尚未构建", L"找不到 PortalV.asi，请先重新构建。");
+        return;
+    }
+    if (!fs::exists(g_gtaV / L"ScriptHookV.dll") || !fs::exists(g_gtaV / L"dinput8.dll")) {
+        ShowError(L"缺少运行库", L"游戏根目录需要 ScriptHookV.dll 和 ASI loader (dinput8.dll)。");
+        return;
+    }
+    // Compatibility is reported in the status panel; allow a manual Story Mode probe.
+    if (!CopyFileW(g_sourceVAsi.c_str(), (g_gtaV / L"PortalV.asi").c_str(), FALSE)) {
+        ShowError(L"V 部署失败", WinError());
+        return;
+    }
+    Refresh();
+}
+
+void DisableV() {
+    if (!g_gtaVValid || IsVRunning()) {
+        ShowError(L"无法停用 V 插件", L"请确认 GTA V 目录有效，并先关闭游戏。");
+        return;
+    }
+    const fs::path asi = g_gtaV / L"PortalV.asi";
+    if (!fs::exists(asi)) return;
+    if (!MoveFileExW(asi.c_str(), (g_gtaV / L"PortalV.asi.disabled").c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        ShowError(L"V 停用失败", WinError());
+    }
+    Refresh();
+}
+
+void SetSaDirectory(const fs::path& directory) {
+    g_dev = directory;
+    g_deployedAsi = g_dev / L"PortalSA.asi";
+    g_disabledAsi = g_dev / L"PortalSA.asi.disabled";
+    g_log = g_dev / L"portal.log";
+    g_game = g_dev / L"gta-sa.EXE";
+    g_saValid = game_paths::ValidateSaDirectory(g_dev, g_gameMd5);
+}
+
+void SelectSaDirectory() {
+    if (IsGameRunning()) {
+        ShowError(L"请先关闭 SA", L"游戏运行时不能切换当前 SA 目录。");
+        return;
+    }
+    const auto selected = game_paths::ChooseDirectory(g_window, g_dev, L"选择 GTA San Andreas 1.0 US 游戏目录");
+    if (!selected) return;
+    const fs::path clean = g_repo / L"game" / L"clean" / L"GTA San Andreas";
+    std::error_code pathError;
+    if (fs::exists(clean) && fs::equivalent(*selected, clean, pathError)) {
+        ShowError(L"不能选择 clean 游戏", L"仓库内 game/clean 保留为原始副本。请选择 dev 目录或另一个开发副本。");
+        return;
+    }
+    std::wstring md5;
+    if (!game_paths::ValidateSaDirectory(*selected, md5)) {
+        ShowError(L"不是支持的 SA 目录", L"需要 GTA SA 1.0 US HOODLUM 的 gta-sa.EXE。检测到的 MD5：" +
+                  (md5.empty() ? L"读取失败" : md5));
+        return;
+    }
+    g_capture.Stop();
+    SetSaDirectory(*selected);
+    if (!game_paths::SaveDirectory(L"SaDirectory", g_dev)) {
+        ShowError(L"保存路径失败", L"本次已切换 SA 目录，但无法保存到当前用户的设置。请检查注册表写入权限。");
+    }
+    Refresh();
+}
+
+void SelectGtaVDirectory() {
+    const auto selected = game_paths::ChooseDirectory(g_window, g_gtaV, L"选择 GTA V Enhanced 游戏目录");
+    if (!selected) return;
+    std::wstring version;
+    if (!game_paths::ValidateGtaVDirectory(*selected, version)) {
+        ShowError(L"不是 GTA V Enhanced 目录",
+                  L"目录中需要有效的 64 位 GTA5_Enhanced.exe，且版本信息应标明 Rockstar Games。请选游戏根目录。");
+        return;
+    }
+    g_gtaV = *selected;
+    g_gtaVVersion = version;
+    g_gtaVValid = true;
+    if (!game_paths::SaveDirectory(L"GtaVEnhancedDirectory", g_gtaV)) {
+        ShowError(L"保存路径失败", L"本次已选择 GTA V 目录，但无法保存到当前用户的设置。请检查注册表写入权限。");
+    }
+    Refresh();
 }
 
 void DisableAsi() {
@@ -612,11 +673,11 @@ void Layout(HWND window) {
     const int gap = 8;
     const int clientWidth = client.right - client.left;
     const int clientHeight = client.bottom - client.top;
-    const int statusHeight = 194;
-    const int statusY = padding + 2 * (buttonHeight + gap) + 2;
+    const int statusHeight = 410;
+    const int statusY = padding + 5 * (buttonHeight + gap) + 2;
     const int contentWidth = clientWidth - padding * 2;
     const int previewHeight = contentWidth * 9 / 16;
-    const int contentHeight = statusY + statusHeight + 6 + previewHeight + 8 + 200 + padding;
+    const int contentHeight = statusY + statusHeight + 6 + 2 * (previewHeight + 8) + 200 + padding;
     g_scrollY = std::clamp(g_scrollY, 0, std::max(0, contentHeight - clientHeight));
     SCROLLINFO scroll{sizeof(scroll), SIF_RANGE | SIF_PAGE | SIF_POS};
     scroll.nMax = contentHeight - 1;
@@ -631,18 +692,36 @@ void Layout(HWND window) {
         x += width + gap;
     }
     x = padding;
-    for (const auto [id, width] : std::array<std::pair<int, int>, 3>{{
-             {kDisable, 86}, {kRefresh, 76}, {kOpenLog, 86}}}) {
+    for (const auto [id, width] : std::array<std::pair<int, int>, 2>{{
+             {kSelectSa, 160}, {kSelectGtaV, 190}}}) {
         MoveWindow(GetDlgItem(window, id), x, padding + buttonHeight + gap - g_scrollY,
                    width, buttonHeight, TRUE);
         x += width + gap;
     }
-    MoveWindow(g_gpuMode, x + 8, padding + buttonHeight + gap - g_scrollY,
+    x = padding;
+    for (const auto [id, width] : std::array<std::pair<int, int>, 3>{{
+             {kDisable, 86}, {kRefresh, 76}, {kOpenLog, 86}}}) {
+        MoveWindow(GetDlgItem(window, id), x, padding + 2 * (buttonHeight + gap) - g_scrollY,
+                   width, buttonHeight, TRUE);
+        x += width + gap;
+    }
+    MoveWindow(g_gpuMode, x + 8, padding + 2 * (buttonHeight + gap) - g_scrollY,
+               300, buttonHeight, TRUE);
+    x = padding;
+    for (const auto [id, width] : std::array<std::pair<int, int>, 4>{{
+             {kDeployV, 116}, {kDisableV, 116}, {kOverlayV, 150}, {kOpenVLog, 110}}}) {
+        MoveWindow(GetDlgItem(window, id), x, padding + 3 * (buttonHeight + gap) - g_scrollY,
+                   width, buttonHeight, TRUE);
+        x += width + gap;
+    }
+    MoveWindow(g_vGpuMode, padding, padding + 4 * (buttonHeight + gap) - g_scrollY,
                300, buttonHeight, TRUE);
     MoveWindow(g_status, padding, statusY - g_scrollY, contentWidth, statusHeight, TRUE);
     const int previewY = statusY + statusHeight + 6;
     MoveWindow(g_preview, padding, previewY - g_scrollY, contentWidth, previewHeight, TRUE);
-    const int logY = previewY + previewHeight + 8;
+    const int vPreviewY = previewY + previewHeight + 8;
+    MoveWindow(g_vPreview, padding, vPreviewY - g_scrollY, contentWidth, previewHeight, TRUE);
+    const int logY = vPreviewY + previewHeight + 8;
     MoveWindow(g_logView, padding, logY - g_scrollY, contentWidth, 200, TRUE);
 }
 
@@ -665,6 +744,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         AddButton(window, kDisable, L"停用 ASI");
         AddButton(window, kRefresh, L"刷新");
         AddButton(window, kOpenLog, L"打开日志");
+        AddButton(window, kSelectSa, L"选择 SA 目录…");
+        AddButton(window, kSelectGtaV, L"选择 GTA V 目录…");
+        AddButton(window, kDeployV, L"部署 V ASI");
+        AddButton(window, kDisableV, L"停用 V ASI");
+        AddButton(window, kOverlayV, L"切换 V 测试画面");
+        AddButton(window, kOpenVLog, L"打开 V 日志");
         g_gpuMode = CreateWindowExW(0, L"BUTTON", L"GPU 窗口捕获（运行中可切换）",
                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                     0, 0, 1, 1, window,
@@ -672,6 +757,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                     g_instance, nullptr);
         SendMessageW(g_gpuMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         SendMessageW(g_gpuMode, BM_SETCHECK, g_captureEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+        g_vGpuMode = CreateWindowExW(0, L"BUTTON", L"V GPU 窗口生产者（可切换）",
+                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                     0, 0, 1, 1, window,
+                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kVCaptureMode)),
+                                     g_instance, nullptr);
+        SendMessageW(g_vGpuMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        SendMessageW(g_vGpuMode, BM_SETCHECK, g_vCaptureEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
         g_status = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                    WS_CHILD | WS_VISIBLE | WS_VSCROLL |
                                        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
@@ -683,6 +775,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_preview = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"等待共享画面",
                                     WS_CHILD | WS_VISIBLE, 0, 0, 640, 360,
                                     window, nullptr, g_instance, nullptr);
+        g_vPreview = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"等待 GTA V 窗口画面",
+                                     WS_CHILD | WS_VISIBLE, 0, 0, 640, 360,
+                                     window, nullptr, g_instance, nullptr);
         SendMessageW(g_status, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         SendMessageW(g_logView, WM_SETFONT, reinterpret_cast<WPARAM>(g_monoFont), TRUE);
         SetTimer(window, kRefreshTimer, 1000, nullptr);
@@ -718,7 +813,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         return 0;
     case WM_TIMER:
         if (wParam == kRefreshTimer) Refresh();
-        if (wParam == kFrameTimer) CaptureGameFrame();
+        if (wParam == kFrameTimer) {
+            CaptureGameFrame();
+            CaptureVFrame();
+        }
         return 0;
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -729,9 +827,24 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         case kDisable: DisableAsi(); break;
         case kRefresh: Refresh(); break;
         case kOpenLog: OpenPath(g_log, L"portal.log 尚未生成。"); break;
+        case kSelectSa: SelectSaDirectory(); break;
+        case kSelectGtaV: SelectGtaVDirectory(); break;
+        case kDeployV: DeployV(); break;
+        case kDisableV: DisableV(); break;
+        case kOverlayV:
+            if (!g_vConnected || !g_vClient.SetOverlayEnabled(!g_vSnapshot.overlayEnabled))
+                ShowError(L"V 尚未连接", L"请先启动已部署 PortalV.asi 的 GTA V Enhanced 故事模式。");
+            Refresh();
+            break;
+        case kOpenVLog: OpenPath(g_gtaV / L"PortalV.log", L"PortalV.log 尚未生成。"); break;
         case kGpuMode:
             g_captureEnabled = SendMessageW(g_gpuMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (!g_captureEnabled) g_capture.Stop();
+            Refresh();
+            break;
+        case kVCaptureMode:
+            g_vCaptureEnabled = SendMessageW(g_vGpuMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (!g_vCaptureEnabled) g_vCapture.Stop();
             Refresh();
             break;
         default: break;
@@ -741,6 +854,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         KillTimer(window, kRefreshTimer);
         KillTimer(window, kFrameTimer);
         g_capture.Stop();
+        g_vCapture.Stop();
+        g_vClient.Disconnect();
         ReleaseSharedTextures();
         if (g_readQuery) g_readQuery->Release();
         if (g_device) g_device->Release();
@@ -768,20 +883,19 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t*, int showCommand) 
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     g_instance = instance;
     SetProcessDPIAware();
-    g_repo = FindRepoRoot();
+    g_repo = game_paths::FindRepoRoot();
     if (g_repo.empty()) {
         MessageBoxW(nullptr, L"无法定位 GTAPortal 仓库。请保留 PortalDev.exe 在仓库的构建目录中。",
                     L"GTAPortal Dev", MB_OK | MB_ICONERROR);
         return 1;
     }
 
-    g_dev = g_repo / L"game" / L"dev" / L"GTA San Andreas";
     g_sourceAsi = g_repo / L"src" / L"PortalSA" / L"bin" / L"GTA-SA" / L"Release" / L"PortalSA.asi";
-    g_deployedAsi = g_dev / L"PortalSA.asi";
-    g_disabledAsi = g_dev / L"PortalSA.asi.disabled";
-    g_log = g_dev / L"portal.log";
-    g_game = g_dev / L"gta-sa.EXE";
-    g_gameMd5 = fs::exists(g_game) ? HashMd5(g_game) : L"";
+    g_sourceVAsi = g_repo / L"src" / L"PortalV" / L"bin" / L"x64" / L"Release" / L"PortalV.asi";
+    const fs::path savedSa = game_paths::LoadSavedDirectory(L"SaDirectory");
+    SetSaDirectory(savedSa.empty() ? g_repo / L"game" / L"dev" / L"GTA San Andreas" : savedSa);
+    g_gtaV = game_paths::LoadSavedDirectory(L"GtaVEnhancedDirectory");
+    if (!g_gtaV.empty()) g_gtaVValid = game_paths::ValidateGtaVDirectory(g_gtaV, g_gtaVVersion);
     if (!StartSupervisor()) {
         MessageBoxW(nullptr, L"无法建立共享帧控制区，或 PortalDev 已在运行。", L"GTAPortal Dev", MB_OK | MB_ICONERROR);
         return 1;

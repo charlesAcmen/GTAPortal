@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include "GpuCapture.h"
+#include "VFramePublisher.h"
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -11,6 +12,8 @@
 #include <winrt/Windows.Foundation.h>
 
 #include <sstream>
+#include <algorithm>
+#include <vector>
 
 namespace {
 using namespace winrt::Windows::Graphics;
@@ -37,6 +40,9 @@ struct GpuCapture::Impl {
     UINT swapWidth = 0;
     UINT swapHeight = 0;
     HWND preview = nullptr;
+    LARGE_INTEGER qpcFrequency{};
+    bool publishVFrames = false;
+    VFramePublisher publisher;
 
     void EnsureSwap(UINT width, UINT height) {
         if (swap && swapWidth == width && swapHeight == height) return;
@@ -65,7 +71,7 @@ struct GpuCapture::Impl {
     }
 };
 
-bool GpuCapture::Start(HWND gameWindow, HWND previewWindow) {
+bool GpuCapture::Start(HWND gameWindow, HWND previewWindow, bool publishVFrames) {
     Stop();
     try {
         if (!GraphicsCaptureSession::IsSupported()) {
@@ -74,9 +80,17 @@ bool GpuCapture::Start(HWND gameWindow, HWND previewWindow) {
         }
         impl_ = new Impl;
         impl_->preview = previewWindow;
+        impl_->publishVFrames = publishVFrames;
+        QueryPerformanceFrequency(&impl_->qpcFrequency);
         winrt::check_hresult(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
             D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
             impl_->device.put(), nullptr, impl_->context.put()));
+        if (publishVFrames && !impl_->publisher.Start(impl_->device.get())) {
+            const std::wstring error = impl_->publisher.Status();
+            Stop();
+            status_ = error;
+            return false;
+        }
         auto dxgi = impl_->device.as<IDXGIDevice>();
         winrt::com_ptr<::IInspectable> inspectable;
         winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(), inspectable.put()));
@@ -106,7 +120,10 @@ bool GpuCapture::Pump() {
     try {
         auto frame = impl_->pool.TryGetNextFrame();
         if (!frame) return false;
-        while (auto newer = impl_->pool.TryGetNextFrame()) frame = newer;
+        while (auto newer = impl_->pool.TryGetNextFrame()) {
+            frame = newer;
+            ++droppedFrames_;
+        }
         const auto size = frame.ContentSize();
         if (size.Width != impl_->poolSize.Width || size.Height != impl_->poolSize.Height) {
             frame.Close();
@@ -120,16 +137,34 @@ bool GpuCapture::Pump() {
         winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()));
         D3D11_TEXTURE2D_DESC description{};
         texture->GetDesc(&description);
-        impl_->EnsureSwap(description.Width, description.Height);
-        winrt::com_ptr<ID3D11Texture2D> backBuffer;
-        winrt::check_hresult(impl_->swap->GetBuffer(0, __uuidof(ID3D11Texture2D), backBuffer.put_void()));
-        impl_->context->CopyResource(backBuffer.get(), texture.get());
-        backBuffer = nullptr;
-        winrt::check_hresult(impl_->swap->Present(0, 0));
+        if (impl_->publishVFrames)
+            impl_->publisher.Publish(impl_->context.get(), texture.get(),
+                                     frame.SystemRelativeTime().count());
+        if (impl_->preview) {
+            impl_->EnsureSwap(description.Width, description.Height);
+            winrt::com_ptr<ID3D11Texture2D> backBuffer;
+            winrt::check_hresult(impl_->swap->GetBuffer(0, __uuidof(ID3D11Texture2D), backBuffer.put_void()));
+            impl_->context->CopyResource(backBuffer.get(), texture.get());
+            backBuffer = nullptr;
+            winrt::check_hresult(impl_->swap->Present(0, 0));
+        }
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        // WinRT TimeSpan stores QPC-relative time in 100 ns units.
+        const int64_t captured100ns = frame.SystemRelativeTime().count();
+        const double now100ns = impl_->qpcFrequency.QuadPart > 0
+            ? static_cast<double>(now.QuadPart) * 10000000.0 / impl_->qpcFrequency.QuadPart : 0;
+        if (captured100ns > 0 && now100ns >= captured100ns &&
+            now100ns - captured100ns < 100000000.0) {
+            lastAgeMs_ = (now100ns - captured100ns) / 10000.0;
+            ageSamples_[ageNext_] = lastAgeMs_;
+            ageNext_ = (ageNext_ + 1) % ageSamples_.size();
+            if (ageCount_ < ageSamples_.size()) ++ageCount_;
+        }
         width_ = description.Width;
         height_ = description.Height;
         ++frames_;
-        status_ = L"GPU 窗口捕获正常";
+        status_ = impl_->publishVFrames ? impl_->publisher.Status() : L"GPU 窗口捕获正常";
         return true;
     } catch (const winrt::hresult_error& error) {
         Stop();
@@ -138,9 +173,36 @@ bool GpuCapture::Pump() {
     }
 }
 
+double GpuCapture::AgeP95Ms() const {
+    if (!ageCount_) return 0;
+    std::vector<double> ages(ageSamples_.begin(), ageSamples_.begin() + ageCount_);
+    const size_t index = (95 * ageCount_ + 99) / 100 - 1;
+    std::nth_element(ages.begin(), ages.begin() + index, ages.end());
+    return ages[index];
+}
+
+uint64_t GpuCapture::PublishedFrames() const {
+    return impl_ ? impl_->publisher.Produced() : 0;
+}
+
+uint64_t GpuCapture::OverwrittenFrames() const {
+    return impl_ ? impl_->publisher.Overwritten() : 0;
+}
+
+uint64_t GpuCapture::PublishDrops() const {
+    return impl_ ? impl_->publisher.Dropped() : 0;
+}
+
+std::wstring GpuCapture::PublishStatus() const {
+    return impl_ ? impl_->publisher.Status() : L"等待 GTA V 窗口";
+}
+
 void GpuCapture::Stop() {
     gameWindow_ = nullptr;
-    status_ = L"等待 dev 游戏窗口";
+    status_ = L"等待游戏窗口";
+    ageCount_ = 0;
+    ageNext_ = 0;
+    lastAgeMs_ = 0;
     if (!impl_) return;
     if (impl_->session) impl_->session.Close();
     if (impl_->pool) impl_->pool.Close();
