@@ -5,6 +5,7 @@ texture SaFrame : SAFRAME;
 sampler SaSampler { Texture = SaFrame; AddressU = CLAMP; AddressV = CLAMP; MinFilter = LINEAR; MagFilter = LINEAR; };
 
 uniform bool SAActive = false;
+uniform bool DepthReady < source = "bufready_depth"; >;
 uniform float3 CameraPosition = 0.0;
 uniform float3 CameraRotation = 0.0;
 uniform float CameraFov = 60.0;
@@ -27,7 +28,8 @@ float HostLinearDepth(float depth)
 float4 PS_Portal(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
     const float4 host = tex2D(ReShade::BackBuffer, uv);
-    if (!SAActive)
+    // Never draw the pane without a host depth buffer: occluders would be ignored.
+    if (!SAActive || !DepthReady)
         return host;
 
     const float yaw = radians(CameraRotation.z);

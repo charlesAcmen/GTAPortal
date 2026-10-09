@@ -281,6 +281,7 @@ void OnBegin(api::effect_runtime* runtime, api::command_list* commands,
                     source.mutex->ReleaseSync(0);
                     InterlockedExchange(&g_frames->slots[newest].state, frames::kFree);
                     const uint64_t upload = ++g_nextFence;
+                    // Queue wait orders D3D12 sampling after the D3D11 texture copy completes.
                     if (SUCCEEDED(g_context4->Signal(g_fence11.Get(), upload)) &&
                         runtime->get_command_queue()->wait({reinterpret_cast<uintptr_t>(g_fence.Get())}, upload)) {
                         const api::resource resource{reinterpret_cast<uintptr_t>(g_display[target].texture.Get())};
@@ -327,6 +328,7 @@ void OnFinish(api::effect_runtime*, api::command_list* commands,
 void OnPresent(api::effect_runtime* runtime) {
     if (g_pendingRetire < 0 || !g_fence) return;
     const uint64_t retired = ++g_nextFence;
+    // Keep this display slot alive until the effect has finished reading it on the GPU.
     if (runtime->get_command_queue()->signal({reinterpret_cast<uintptr_t>(g_fence.Get())}, retired))
         g_display[g_pendingRetire].retireValue = retired;
     g_pendingRetire = -1;

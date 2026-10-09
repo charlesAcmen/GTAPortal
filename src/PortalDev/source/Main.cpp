@@ -48,14 +48,22 @@ enum ControlId : int {
 
 HINSTANCE g_instance{};
 HWND g_window{};
-HWND g_status{};
+HWND g_saStatus{};
+HWND g_vStatus{};
 HWND g_logView{};
 HWND g_preview{};
 HWND g_vPreview{};
+HWND g_saHeading{};
+HWND g_vHeading{};
+HWND g_vSafety{};
+HWND g_saPreviewHeading{};
+HWND g_vPreviewHeading{};
+HWND g_logHeading{};
 HWND g_gpuMode{};
 HWND g_vGpuMode{};
 HFONT g_uiFont{};
 HFONT g_monoFont{};
+HFONT g_headingFont{};
 fs::path g_repo;
 fs::path g_dev;
 fs::path g_sourceAsi;
@@ -103,7 +111,8 @@ std::array<double, 600> g_ageSamples{};
 size_t g_ageCount{};
 size_t g_ageNext{};
 int g_scrollY{};
-std::wstring g_statusText;
+std::wstring g_saStatusText;
+std::wstring g_vStatusText;
 std::wstring g_logText;
 GpuCapture g_capture;
 GpuCapture g_vCapture;
@@ -464,16 +473,10 @@ void Refresh() {
     const bool logReady = fs::exists(g_log);
     const std::string logBytes = ReadTailBytes(g_log);
 
-    std::wostringstream status;
-    status << L"SA 版本：" << (g_saValid ? L"✓ HOODLUM 1.0 US" : L"✗ 未识别")
+    std::wostringstream saStatus;
+    saStatus << L"版本：" << (g_saValid ? L"✓ HOODLUM 1.0 US" : L"✗ 未识别")
            << L"    MD5: " << (g_gameMd5.empty() ? L"读取失败" : g_gameMd5) << L"\r\n"
-           << L"SA 目录：" << g_dev.wstring() << L"\r\n"
-           << L"GTA V Enhanced：" << (g_gtaVValid ? L"✓ " + g_gtaVVersion : L"✗ 未选择或无效")
-           << L"    目录：" << (g_gtaV.empty() ? L"未选择" : g_gtaV.wstring()) << L"\r\n"
-           << L"Script Hook V：" << (vHookVersion.empty() ? L"未安装/无法读取版本" : vHookVersion)
-           << L"    文件版本："
-           << (vHookMatches ? L"一致" : g_vConnected ? L"不同，但 ASI 正在运行" : L"不同，需实测")
-           << L"\r\n"
+           << L"目录：" << g_dev.wstring() << L"\r\n"
            << L"ASI 构建：" << (sourceReady ? L"✓ " : L"✗ ")
            << (sourceReady ? SizeText(g_sourceAsi) : L"尚未生成")
            << L"    dev 部署：" << (matching ? L"✓ 已同步" : deployed ? L"△ 版本可能不同" : L"✗ 未部署")
@@ -489,29 +492,37 @@ void Refresh() {
            << g_capture.AgeP95Ms() << L" ms    主动跳过旧帧：" << g_capture.DroppedFrames() << L"\r\n"
            << L"SA 共享帧：发布 " << g_capture.PublishedFrames()
            << L" / 覆盖旧帧 " << g_capture.OverwrittenFrames()
-           << L" / 跳过 " << g_capture.PublishDrops() << L"\r\n"
-           << L"V 端：" << (vRunning ? L"● 运行中" : L"○ 未运行")
-           << L"    ASI：" << (fs::exists(g_gtaV / L"PortalV.asi") ? L"已部署" : L"未部署")
+           << L" / 跳过 " << g_capture.PublishDrops();
+    UpdateText(g_saStatus, g_saStatusText, saStatus.str(), false);
+
+    std::wostringstream vStatus;
+    vStatus << L"版本：" << (g_gtaVValid ? L"✓ " + g_gtaVVersion : L"✗ 未选择或无效")
+           << L"    游戏：" << (vRunning ? L"● 运行中" : L"○ 未运行") << L"\r\n"
+           << L"目录：" << (g_gtaV.empty() ? L"未选择" : g_gtaV.wstring()) << L"\r\n"
+           << L"Script Hook V：" << (vHookVersion.empty() ? L"未安装/无法读取版本" : vHookVersion)
+           << L"    文件版本："
+           << (vHookMatches ? L"一致" : g_vConnected ? L"不同，但 ASI 正在运行" : L"不同，需实测")
+           << L"\r\n"
+           << L"插件：" << (fs::exists(g_gtaV / L"PortalV.asi") ? L"已部署" : L"未部署")
            << L"    状态：" << (g_vConnected ? L"已连接" : L"未连接") << L"\r\n";
     if (g_vConnected) {
-        status << L"V 相机：(" << g_vSnapshot.cameraPosition[0] << L", "
+        vStatus << L"相机：(" << g_vSnapshot.cameraPosition[0] << L", "
                << g_vSnapshot.cameraPosition[1] << L", " << g_vSnapshot.cameraPosition[2]
                << L") FOV " << g_vSnapshot.fovDegrees << L"  帧 " << g_vSnapshot.frameId
                << L"  状态年龄 " << g_vSnapshot.ageMs << L" ms\r\n";
     }
-    status << L"V 测试画面：" << (g_vConnected && g_vSnapshot.overlayEnabled ? L"开启" : L"关闭/未连接") << L"\r\n"
-           << L"V SA 小窗：" << (fs::exists(g_gtaV / L"reshade-shaders" / L"Shaders" / L"PortalSA.fx") ? L"着色器已部署" : L"着色器未部署")
+    vStatus << L"测试 HUD：" << (g_vConnected && g_vSnapshot.overlayEnabled ? L"开启" : L"关闭/未连接") << L"\r\n"
+           << L"SA 矩形：" << (fs::exists(g_gtaV / L"reshade-shaders" / L"Shaders" / L"PortalSA.fx") ? L"着色器已部署" : L"着色器未部署")
            << L"；ReShade：" << (fs::exists(g_gtaV / L"ReShade64.asi") || fs::exists(g_gtaV / L"dxgi.dll") ? L"检测到运行库" : L"未检测到运行库")
-           << L"；Grove Street 到位后按 F9 固定画面\r\n"
+           << L"；按 F9 重设位置\r\n"
            << L"V 窗口生产者：" << (g_vCaptureEnabled ? g_vCapture.Status() : L"已关闭")
            << L"    " << g_vCapture.Width() << L" × " << g_vCapture.Height()
            << L"    " << std::fixed << std::setprecision(1) << g_vCaptureFps << L" FPS\r\n"
            << L"V 共享帧：发布 " << g_vCapture.PublishedFrames()
            << L" / 覆盖旧帧 " << g_vCapture.OverwrittenFrames()
            << L" / 跳过 " << g_vCapture.PublishDrops() << L"\r\n"
-           << L"相机元数据：见下方 PortalSA 日志"
-           << L"\r\n仓库：" << g_repo.wstring();
-    UpdateText(g_status, g_statusText, status.str(), false);
+           << L"仅停用 PortalV.asi 不会移除 Script Hook V 或 ReShade，不能用于切换 Online。";
+    UpdateText(g_vStatus, g_vStatusText, vStatus.str(), false);
 
     const std::wstring wideLog = logReady ? Widen(logBytes) : L"portal.log 尚未生成。部署 ASI 并手动启动 dev 游戏后，此处会自动刷新。";
     UpdateText(g_logView, g_logText, wideLog, true);
@@ -691,11 +702,28 @@ void Layout(HWND window) {
     const int gap = 8;
     const int clientWidth = client.right - client.left;
     const int clientHeight = client.bottom - client.top;
-    const int statusHeight = 410;
-    const int statusY = padding + 5 * (buttonHeight + gap) + 2;
     const int contentWidth = clientWidth - padding * 2;
     const int previewHeight = contentWidth * 9 / 16;
-    const int contentHeight = statusY + statusHeight + 6 + 2 * (previewHeight + 8) + 200 + padding;
+    const int headingHeight = 24;
+    const int statusHeight = 210;
+    int y = padding;
+    const int commonY = y; y += buttonHeight + gap * 2;
+    const int saHeadingY = y; y += headingHeight + 4;
+    const int saActionsY = y; y += buttonHeight + gap;
+    const int saToolsY = y; y += buttonHeight + gap;
+    const int saStatusY = y; y += statusHeight + gap;
+    const int saPreviewHeadingY = y; y += headingHeight + 4;
+    const int saPreviewY = y; y += previewHeight + gap * 2;
+    const int vHeadingY = y; y += headingHeight + 4;
+    const int vSafetyY = y; y += 36 + gap;
+    const int vActionsY = y; y += buttonHeight + gap;
+    const int vToolsY = y; y += buttonHeight + gap;
+    const int vStatusY = y; y += statusHeight + gap;
+    const int vPreviewHeadingY = y; y += headingHeight + 4;
+    const int vPreviewY = y; y += previewHeight + gap * 2;
+    const int logHeadingY = y; y += headingHeight + 4;
+    const int logY = y; y += 200 + padding;
+    const int contentHeight = y;
     g_scrollY = std::clamp(g_scrollY, 0, std::max(0, contentHeight - clientHeight));
     SCROLLINFO scroll{sizeof(scroll), SIF_RANGE | SIF_PAGE | SIF_POS};
     scroll.nMax = contentHeight - 1;
@@ -703,44 +731,42 @@ void Layout(HWND window) {
     scroll.nPos = g_scrollY;
     SetScrollInfo(window, SB_VERT, &scroll, TRUE);
 
+    const auto place = [&](HWND control, int x, int top, int width, int height) {
+        MoveWindow(control, x, top - g_scrollY, width, height, TRUE);
+    };
+    const auto button = [&](int id, int x, int top, int width) {
+        place(GetDlgItem(window, id), x, top, width, buttonHeight);
+    };
+    button(kBuild, padding, commonY, 96);
+    button(kRefresh, padding + 96 + gap, commonY, 76);
+
+    place(g_saHeading, padding, saHeadingY, contentWidth, headingHeight);
     int x = padding;
     for (const auto [id, width] : std::array<std::pair<int, int>, 4>{{
-             {kBuild, 96}, {kDeploy, 86}, {kDeployLaunch, 146}, {kLaunch, 118}}}) {
-        MoveWindow(GetDlgItem(window, id), x, padding - g_scrollY, width, buttonHeight, TRUE);
-        x += width + gap;
+             {kSelectSa, 160}, {kDeploy, 86}, {kDeployLaunch, 146}, {kLaunch, 118}}}) {
+        button(id, x, saActionsY, width); x += width + gap;
     }
-    x = padding;
-    for (const auto [id, width] : std::array<std::pair<int, int>, 2>{{
-             {kSelectSa, 160}, {kSelectGtaV, 190}}}) {
-        MoveWindow(GetDlgItem(window, id), x, padding + buttonHeight + gap - g_scrollY,
-                   width, buttonHeight, TRUE);
-        x += width + gap;
-    }
-    x = padding;
-    for (const auto [id, width] : std::array<std::pair<int, int>, 3>{{
-             {kDisable, 86}, {kRefresh, 76}, {kOpenLog, 86}}}) {
-        MoveWindow(GetDlgItem(window, id), x, padding + 2 * (buttonHeight + gap) - g_scrollY,
-                   width, buttonHeight, TRUE);
-        x += width + gap;
-    }
-    MoveWindow(g_gpuMode, x + 8, padding + 2 * (buttonHeight + gap) - g_scrollY,
-               300, buttonHeight, TRUE);
-    x = padding;
-    for (const auto [id, width] : std::array<std::pair<int, int>, 4>{{
-             {kDeployV, 116}, {kDisableV, 116}, {kOverlayV, 150}, {kOpenVLog, 110}}}) {
-        MoveWindow(GetDlgItem(window, id), x, padding + 3 * (buttonHeight + gap) - g_scrollY,
-                   width, buttonHeight, TRUE);
-        x += width + gap;
-    }
-    MoveWindow(g_vGpuMode, padding, padding + 4 * (buttonHeight + gap) - g_scrollY,
-               300, buttonHeight, TRUE);
-    MoveWindow(g_status, padding, statusY - g_scrollY, contentWidth, statusHeight, TRUE);
-    const int previewY = statusY + statusHeight + 6;
-    MoveWindow(g_preview, padding, previewY - g_scrollY, contentWidth, previewHeight, TRUE);
-    const int vPreviewY = previewY + previewHeight + 8;
-    MoveWindow(g_vPreview, padding, vPreviewY - g_scrollY, contentWidth, previewHeight, TRUE);
-    const int logY = vPreviewY + previewHeight + 8;
-    MoveWindow(g_logView, padding, logY - g_scrollY, contentWidth, 200, TRUE);
+    button(kDisable, padding, saToolsY, 86);
+    button(kOpenLog, padding + 86 + gap, saToolsY, 86);
+    place(g_gpuMode, padding + 86 + gap + 86 + gap, saToolsY, 300, buttonHeight);
+    place(g_saStatus, padding, saStatusY, contentWidth, statusHeight);
+    place(g_saPreviewHeading, padding, saPreviewHeadingY, contentWidth, headingHeight);
+    place(g_preview, padding, saPreviewY, contentWidth, previewHeight);
+
+    place(g_vHeading, padding, vHeadingY, contentWidth, headingHeight);
+    place(g_vSafety, padding, vSafetyY, contentWidth, 36);
+    button(kSelectGtaV, padding, vActionsY, 190);
+    button(kDeployV, padding + 190 + gap, vActionsY, 116);
+    button(kDisableV, padding + 190 + gap + 116 + gap, vActionsY, 150);
+    button(kOverlayV, padding, vToolsY, 150);
+    button(kOpenVLog, padding + 150 + gap, vToolsY, 110);
+    place(g_vGpuMode, padding + 150 + gap + 110 + gap, vToolsY, 300, buttonHeight);
+    place(g_vStatus, padding, vStatusY, contentWidth, statusHeight);
+    place(g_vPreviewHeading, padding, vPreviewHeadingY, contentWidth, headingHeight);
+    place(g_vPreview, padding, vPreviewY, contentWidth, previewHeight);
+
+    place(g_logHeading, padding, logHeadingY, contentWidth, headingHeight);
+    place(g_logView, padding, logY, contentWidth, 200);
 }
 
 HWND AddButton(HWND parent, int id, const wchar_t* text) {
@@ -750,6 +776,13 @@ HWND AddButton(HWND parent, int id, const wchar_t* text) {
                                   g_instance, nullptr);
     SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
     return button;
+}
+
+HWND AddHeading(HWND parent, const wchar_t* text) {
+    HWND heading = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+                                   0, 0, 1, 1, parent, nullptr, g_instance, nullptr);
+    SendMessageW(heading, WM_SETFONT, reinterpret_cast<WPARAM>(g_headingFont), TRUE);
+    return heading;
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -765,9 +798,18 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         AddButton(window, kSelectSa, L"选择 SA 目录…");
         AddButton(window, kSelectGtaV, L"选择 GTA V 目录…");
         AddButton(window, kDeployV, L"部署 V + FX");
-        AddButton(window, kDisableV, L"停用 V ASI");
-        AddButton(window, kOverlayV, L"切换 V 测试画面");
+        AddButton(window, kDisableV, L"仅停用 V 插件");
+        AddButton(window, kOverlayV, L"切换测试 HUD");
         AddButton(window, kOpenVLog, L"打开 V 日志");
+        g_saHeading = AddHeading(window, L"GTA San Andreas · 开发副本");
+        g_vHeading = AddHeading(window, L"GTA V Enhanced · 故事模式开发副本");
+        g_vSafety = CreateWindowExW(0, L"STATIC",
+                                   L"仅停用 V 插件不会清理 Script Hook V / ReShade；勿用此目录进入 Online。",
+                                   WS_CHILD | WS_VISIBLE, 0, 0, 1, 1, window, nullptr, g_instance, nullptr);
+        SendMessageW(g_vSafety, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        g_saPreviewHeading = AddHeading(window, L"SA 实时画面");
+        g_vPreviewHeading = AddHeading(window, L"GTA V 实时画面");
+        g_logHeading = AddHeading(window, L"SA 插件日志");
         g_gpuMode = CreateWindowExW(0, L"BUTTON", L"GPU 窗口捕获（运行中可切换）",
                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                     0, 0, 1, 1, window,
@@ -782,10 +824,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                      g_instance, nullptr);
         SendMessageW(g_vGpuMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         SendMessageW(g_vGpuMode, BM_SETCHECK, g_vCaptureEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
-        g_status = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                                   WS_CHILD | WS_VISIBLE | WS_VSCROLL |
-                                       ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-                                   0, 0, 1, 1, window, nullptr, g_instance, nullptr);
+        g_saStatus = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                     WS_CHILD | WS_VISIBLE | WS_VSCROLL |
+                                         ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+                                     0, 0, 1, 1, window, nullptr, g_instance, nullptr);
+        g_vStatus = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                    WS_CHILD | WS_VISIBLE | WS_VSCROLL |
+                                        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+                                    0, 0, 1, 1, window, nullptr, g_instance, nullptr);
         g_logView = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                     WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL |
                                         ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
@@ -796,7 +842,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_vPreview = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"等待 GTA V 窗口画面",
                                      WS_CHILD | WS_VISIBLE, 0, 0, 640, 360,
                                      window, nullptr, g_instance, nullptr);
-        SendMessageW(g_status, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        SendMessageW(g_saStatus, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        SendMessageW(g_vStatus, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         SendMessageW(g_logView, WM_SETFONT, reinterpret_cast<WPARAM>(g_monoFont), TRUE);
         SetTimer(window, kRefreshTimer, 1000, nullptr);
         SetTimer(window, kFrameTimer, 15, nullptr);
@@ -925,6 +972,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t*, int showCommand) 
     g_monoFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                              FIXED_PITCH, L"Consolas");
+    g_headingFont = CreateFontW(-19, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                DEFAULT_PITCH, L"Segoe UI");
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -955,5 +1005,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t*, int showCommand) 
 
     DeleteObject(g_uiFont);
     DeleteObject(g_monoFont);
+    DeleteObject(g_headingFont);
     return static_cast<int>(message.wParam);
 }

@@ -76,7 +76,7 @@ void OpenState() {
     g_state->version = portal_v::kVersion;
     g_state->size = sizeof(*g_state);
     g_state->processId = GetCurrentProcessId();
-    g_state->overlayEnabled = 1;
+    g_state->overlayEnabled = 0;
     MemoryBarrier();
     g_state->magic = portal_v::kMagic;
 }
@@ -117,6 +117,7 @@ void ScriptMain() {
         const float farClip = invoke<float>(0xDFC8CBC606FDB0FC);
         const bool f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
         if (f9 && !previousF9 && std::isfinite(renderedPosition.x) && std::isfinite(renderedRotation.z)) {
+            // Anchor in world coordinates once; subsequent camera motion must not move the plane.
             const float yaw = renderedRotation.z * 0.01745329252f;
             g_planeCenter[0] = renderedPosition.x - std::sin(yaw) * 3.0f;
             g_planeCenter[1] = renderedPosition.y + std::cos(yaw) * 3.0f;
@@ -155,8 +156,6 @@ void ScriptMain() {
             g_state->cameraValid = std::isfinite(fov) && fov > 0.0f;
             InterlockedIncrement(&g_state->sequence);
             if (InterlockedCompareExchange(&g_state->overlayEnabled, 0, 0)) DrawTestPattern(tick);
-        } else {
-            DrawTestPattern(tick);
         }
         WAIT(0);
     }
