@@ -17,10 +17,13 @@
 #include <common.h>
 #include <safetyhook.hpp>
 
+#include "D3D9ExBridge.h"
+#include "../../PortalProtocol.h"
+
 namespace {
 
 constexpr DWORD kStateLogIntervalMs = 100;
-constexpr DWORD kFrameIntervalMs = 2000;
+constexpr DWORD kErrorLogIntervalMs = 5000;
 // GTA SA 1.0 US HOODLUM; plugin-sdk uses this address in RenderWare.cpp.
 constexpr uintptr_t kShowRasterAddress = 0x7EE370;
 
@@ -57,15 +60,34 @@ State g_state;
 std::array<float, 16> g_viewMatrix{};
 std::array<float, 16> g_projectionMatrix{};
 DWORD g_renderMatrixTick = 0;
+uint64_t g_renderMatrixSerial = 0;
+uint64_t g_lastPublishedMatrixSerial = 0;
 DWORD g_lastStateLogTick = 0;
-DWORD g_lastFrameTick = 0;
+DWORD g_lastErrorLogTick = 0;
 bool g_initialized = false;
 bool g_supported = false;
+bool g_bridgeInstalled = false;
 HANDLE g_log = INVALID_HANDLE_VALUE;
 wchar_t g_logPath[MAX_PATH]{};
-wchar_t g_framePath[MAX_PATH]{};
-wchar_t g_tempFramePath[MAX_PATH]{};
 safetyhook::InlineHook g_showRasterHook;
+safetyhook::InlineHook g_resetHook;
+HANDLE g_mapping = nullptr;
+portal::SharedFrames* g_frames = nullptr;
+IDirect3DDevice9* g_captureDevice = nullptr;
+UINT g_captureWidth = 0;
+UINT g_captureHeight = 0;
+uint64_t g_frameId = 0;
+DWORD g_lastCreateAttemptTick = 0;
+LARGE_INTEGER g_qpcFrequency{};
+
+struct GpuSlot {
+    IDirect3DTexture9* texture = nullptr;
+    IDirect3DSurface9* surface = nullptr;
+    IDirect3DQuery9* ready = nullptr;
+    bool pending = false;
+};
+
+std::array<GpuSlot, portal::kSlotCount> g_gpuSlots{};
 
 bool WriteAll(HANDLE file, const void* data, DWORD size) {
     DWORD written = 0;
@@ -99,13 +121,9 @@ bool Initialize() {
     separator[1] = L'\0';
     wcscpy_s(g_logPath, directory);
     wcscat_s(g_logPath, L"portal.log");
-    wcscpy_s(g_framePath, directory);
-    wcscat_s(g_framePath, L"portal-frame.bmp");
-    wcscpy_s(g_tempFramePath, directory);
-    wcscat_s(g_tempFramePath, L"portal-frame.tmp");
-
     g_log = CreateFileW(g_logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    QueryPerformanceFrequency(&g_qpcFrequency);
     g_supported = plugin::GetGameVersion() == GAME_10US_HOODLUM;
     Log(g_supported ? "PortalSA loaded: GTA SA 1.0 US HOODLUM"
                     : "PortalSA disabled: unsupported GTA SA executable");
@@ -222,113 +240,249 @@ void OnRenderScene() {
         std::memcpy(g_viewMatrix.data(), view, sizeof(_D3DMATRIX));
         std::memcpy(g_projectionMatrix.data(), projection, sizeof(_D3DMATRIX));
         g_renderMatrixTick = GetTickCount();
+        ++g_renderMatrixSerial;
     }
 }
 
-HRESULT SaveBackBuffer(IDirect3DDevice9* device, UINT& width, UINT& height) {
+int64_t Qpc() {
+    LARGE_INTEGER value{};
+    QueryPerformanceCounter(&value);
+    return value.QuadPart;
+}
+
+void GpuError(const char* operation, HRESULT result) {
+    if (g_frames) InterlockedIncrement(&g_frames->errors);
+    const DWORD now = GetTickCount();
+    if (now - g_lastErrorLogTick < kErrorLogIntervalMs) return;
+    g_lastErrorLogTick = now;
+    std::ostringstream line;
+    line << "gpu operation=" << operation << " hresult=0x" << std::hex << static_cast<unsigned>(result);
+    Log(line.str());
+}
+
+void ReleaseGpuSlots() {
+    for (int index = 0; index < portal::kSlotCount; ++index) {
+        auto& gpu = g_gpuSlots[index];
+        if (gpu.ready) gpu.ready->Release();
+        if (gpu.surface) gpu.surface->Release();
+        if (gpu.texture) gpu.texture->Release();
+        gpu = {};
+        if (g_frames) {
+            auto& slot = g_frames->slots[index];
+            InterlockedExchange(&slot.state, portal::kFree);
+            slot.sharedHandle = 0;
+        }
+    }
+    g_captureWidth = 0;
+    g_captureHeight = 0;
+}
+
+bool AttachFrames() {
+    if (g_frames) return true;
+    HANDLE mapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, portal::kMappingName);
+    if (!mapping) return false;
+    auto* frames = static_cast<portal::SharedFrames*>(
+        MapViewOfFile(mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(portal::SharedFrames)));
+    if (!frames || frames->magic != portal::kMagic || frames->version != portal::kVersion ||
+        frames->size != sizeof(portal::SharedFrames)) {
+        if (frames) UnmapViewOfFile(frames);
+        CloseHandle(mapping);
+        return false;
+    }
+    g_mapping = mapping;
+    g_frames = frames;
+    if (g_frames->producerPid && g_frames->producerPid != GetCurrentProcessId()) {
+        for (auto& slot : g_frames->slots) {
+            InterlockedExchange(&slot.state, portal::kFree);
+            slot.sharedHandle = 0;
+        }
+        InterlockedIncrement(&g_frames->generation);
+    }
+    InterlockedExchange(&g_frames->producerPid, static_cast<LONG>(GetCurrentProcessId()));
+    Log("GPU frame mapping attached");
+    return true;
+}
+
+bool CreateGpuSlots(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
+    if (!g_frames) return false;
+    for (auto& slot : g_frames->slots) {
+        if (InterlockedCompareExchange(&slot.state, 0, 0) == portal::kReading) return false;
+    }
+    ReleaseGpuSlots();
+
+    IDirect3DDevice9Ex* exDevice = nullptr;
+    HRESULT result = device->QueryInterface(IID_IDirect3DDevice9Ex, reinterpret_cast<void**>(&exDevice));
+    if (FAILED(result)) {
+        GpuError("device_is_not_D3D9Ex", result);
+        return false;
+    }
+    exDevice->Release();
+
+    IDirect3D9* d3d = nullptr;
+    IDirect3D9Ex* d3dEx = nullptr;
+    D3DDEVICE_CREATION_PARAMETERS creation{};
+    LUID luid{};
+    result = device->GetDirect3D(&d3d);
+    if (SUCCEEDED(result)) result = d3d->QueryInterface(IID_IDirect3D9Ex, reinterpret_cast<void**>(&d3dEx));
+    if (SUCCEEDED(result)) result = device->GetCreationParameters(&creation);
+    if (SUCCEEDED(result)) result = d3dEx->GetAdapterLUID(creation.AdapterOrdinal, &luid);
+    if (d3dEx) d3dEx->Release();
+    if (d3d) d3d->Release();
+    if (FAILED(result)) {
+        GpuError("adapter_LUID", result);
+        return false;
+    }
+
+    for (int index = 0; index < portal::kSlotCount; ++index) {
+        auto& gpu = g_gpuSlots[index];
+        HANDLE handle = nullptr;
+        result = device->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
+                                       desc.Format, D3DPOOL_DEFAULT, &gpu.texture, &handle);
+        if (SUCCEEDED(result)) result = gpu.texture->GetSurfaceLevel(0, &gpu.surface);
+        if (SUCCEEDED(result)) result = device->CreateQuery(D3DQUERYTYPE_EVENT, &gpu.ready);
+        if (FAILED(result) || !handle) {
+            ReleaseGpuSlots();
+            GpuError("create_shared_texture", FAILED(result) ? result : E_FAIL);
+            return false;
+        }
+        auto& slot = g_frames->slots[index];
+        slot.sharedHandle = reinterpret_cast<uintptr_t>(handle);
+        slot.width = desc.Width;
+        slot.height = desc.Height;
+        slot.format = static_cast<uint32_t>(desc.Format);
+    }
+    g_captureDevice = device;
+    g_captureWidth = desc.Width;
+    g_captureHeight = desc.Height;
+    g_frames->adapterLuidLow = luid.LowPart;
+    g_frames->adapterLuidHigh = luid.HighPart;
+    InterlockedIncrement(&g_frames->generation);
+    std::ostringstream line;
+    line << "GPU shared textures ready width=" << desc.Width << " height=" << desc.Height
+         << " format=" << static_cast<unsigned>(desc.Format);
+    Log(line.str());
+    return true;
+}
+
+void CompleteGpuSlots() {
+    if (!g_frames) return;
+    for (int index = 0; index < portal::kSlotCount; ++index) {
+        auto& gpu = g_gpuSlots[index];
+        if (!gpu.pending) continue;
+        const HRESULT result = gpu.ready->GetData(nullptr, 0, 0);
+        if (result == S_FALSE) continue;
+        gpu.pending = false;
+        auto& slot = g_frames->slots[index];
+        if (SUCCEEDED(result)) {
+            slot.readyQpc = Qpc();
+            MemoryBarrier();
+            InterlockedExchange(&slot.state, portal::kReady);
+            InterlockedIncrement(&g_frames->produced);
+        } else {
+            InterlockedExchange(&slot.state, portal::kFree);
+            GpuError("gpu_completion", result);
+        }
+    }
+}
+
+int ClaimGpuSlot() {
+    for (int index = 0; index < portal::kSlotCount; ++index) {
+        if (InterlockedCompareExchange(&g_frames->slots[index].state, portal::kWriting,
+                                       portal::kFree) == portal::kFree) return index;
+    }
+    int oldest = -1;
+    for (int index = 0; index < portal::kSlotCount; ++index) {
+        auto& slot = g_frames->slots[index];
+        if (InterlockedCompareExchange(&slot.state, 0, 0) == portal::kReady &&
+            (oldest < 0 || slot.frameId < g_frames->slots[oldest].frameId)) oldest = index;
+    }
+    if (oldest >= 0 && InterlockedCompareExchange(&g_frames->slots[oldest].state,
+                                                   portal::kWriting, portal::kReady) == portal::kReady) {
+        InterlockedIncrement(&g_frames->dropped);
+        return oldest;
+    }
+    InterlockedIncrement(&g_frames->dropped);
+    return -1;
+}
+
+void PublishGpuFrame(IDirect3DDevice9* device) {
     IDirect3DSurface9* backBuffer = nullptr;
     HRESULT result = device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
-    if (FAILED(result)) {
-        return result;
-    }
-
+    if (FAILED(result)) { GpuError("get_backbuffer", result); return; }
     D3DSURFACE_DESC desc{};
     result = backBuffer->GetDesc(&desc);
-    if (SUCCEEDED(result) && desc.Format != D3DFMT_A8R8G8B8 && desc.Format != D3DFMT_X8R8G8B8) {
-        result = D3DERR_INVALIDCALL;
+    if (FAILED(result) || (desc.Format != D3DFMT_A8R8G8B8 && desc.Format != D3DFMT_X8R8G8B8)) {
+        backBuffer->Release();
+        GpuError("backbuffer_format", FAILED(result) ? result : D3DERR_INVALIDCALL);
+        return;
     }
-    IDirect3DSurface9* readback = nullptr;
-    IDirect3DSurface9* resolved = nullptr;
-    if (SUCCEEDED(result)) {
-        result = device->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format,
-                                                     D3DPOOL_SYSTEMMEM, &readback, nullptr);
+    if (g_captureDevice != device || g_captureWidth != desc.Width || g_captureHeight != desc.Height) {
+        const DWORD now = GetTickCount();
+        if (now - g_lastCreateAttemptTick < 2000) { backBuffer->Release(); return; }
+        g_lastCreateAttemptTick = now;
+        if (!CreateGpuSlots(device, desc)) { backBuffer->Release(); return; }
     }
-    if (SUCCEEDED(result)) {
-        if (desc.MultiSampleType != D3DMULTISAMPLE_NONE) {
-            result = device->CreateRenderTarget(desc.Width, desc.Height, desc.Format,
-                                                D3DMULTISAMPLE_NONE, 0, FALSE, &resolved, nullptr);
-            if (SUCCEEDED(result)) {
-                result = device->StretchRect(backBuffer, nullptr, resolved, nullptr, D3DTEXF_NONE);
-            }
-        }
-        if (SUCCEEDED(result)) {
-            result = device->GetRenderTargetData(resolved ? resolved : backBuffer, readback);
-        }
+    const int index = ClaimGpuSlot();
+    if (index < 0) { backBuffer->Release(); return; }
+    auto& slot = g_frames->slots[index];
+    slot.frameId = ++g_frameId;
+    slot.captureQpc = Qpc();
+    slot.cameraValid = g_state.cameraValid && g_renderMatrixSerial != g_lastPublishedMatrixSerial;
+    slot.stateAgeMs = g_state.tick ? GetTickCount() - g_state.tick : 0;
+    slot.cameraPosition[0] = g_state.cameraPosition.x;
+    slot.cameraPosition[1] = g_state.cameraPosition.y;
+    slot.cameraPosition[2] = g_state.cameraPosition.z;
+    slot.cameraForward[0] = g_state.cameraForward.x;
+    slot.cameraForward[1] = g_state.cameraForward.y;
+    slot.cameraForward[2] = g_state.cameraForward.z;
+    slot.cameraUp[0] = g_state.cameraUp.x;
+    slot.cameraUp[1] = g_state.cameraUp.y;
+    slot.cameraUp[2] = g_state.cameraUp.z;
+    slot.fovDegrees = g_state.fovDegrees;
+    slot.nearClip = g_state.nearClip;
+    slot.farClip = g_state.farClip;
+    slot.viewWindowX = g_state.viewWindowX;
+    slot.viewWindowY = g_state.viewWindowY;
+    if (slot.cameraValid) {
+        std::memcpy(slot.view, g_viewMatrix.data(), sizeof(slot.view));
+        std::memcpy(slot.projection, g_projectionMatrix.data(), sizeof(slot.projection));
     }
-    if (resolved) {
-        resolved->Release();
-    }
+    g_lastPublishedMatrixSerial = g_renderMatrixSerial;
+    result = device->StretchRect(backBuffer, nullptr, g_gpuSlots[index].surface, nullptr, D3DTEXF_NONE);
     backBuffer->Release();
-
+    if (SUCCEEDED(result)) result = g_gpuSlots[index].ready->Issue(D3DISSUE_END);
+    slot.submitUs = static_cast<uint32_t>(1000000 * (Qpc() - slot.captureQpc) / g_qpcFrequency.QuadPart);
     if (SUCCEEDED(result)) {
-        D3DLOCKED_RECT pixels{};
-        result = readback->LockRect(&pixels, nullptr, D3DLOCK_READONLY);
-        if (SUCCEEDED(result)) {
-            BITMAPFILEHEADER fileHeader{};
-            BITMAPINFOHEADER infoHeader{};
-            const DWORD rowBytes = desc.Width * 4;
-            const DWORD imageBytes = rowBytes * desc.Height;
-            fileHeader.bfType = 0x4D42;
-            fileHeader.bfOffBits = sizeof(fileHeader) + sizeof(infoHeader);
-            fileHeader.bfSize = fileHeader.bfOffBits + imageBytes;
-            infoHeader.biSize = sizeof(infoHeader);
-            infoHeader.biWidth = static_cast<LONG>(desc.Width);
-            infoHeader.biHeight = -static_cast<LONG>(desc.Height); // Top-down BGRA pixels.
-            infoHeader.biPlanes = 1;
-            infoHeader.biBitCount = 32;
-            infoHeader.biCompression = BI_RGB;
-            infoHeader.biSizeImage = imageBytes;
+        g_gpuSlots[index].pending = true;
+    } else {
+        InterlockedExchange(&slot.state, portal::kFree);
+        GpuError("gpu_copy", result);
+    }
+}
 
-            HANDLE frame = CreateFileW(g_tempFramePath, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            bool saved = frame != INVALID_HANDLE_VALUE;
-            if (saved) {
-                saved = WriteAll(frame, &fileHeader, sizeof(fileHeader)) &&
-                        WriteAll(frame, &infoHeader, sizeof(infoHeader));
-                for (UINT row = 0; saved && row < desc.Height; ++row) {
-                    const auto* source = static_cast<const BYTE*>(pixels.pBits) + row * pixels.Pitch;
-                    saved = WriteAll(frame, source, rowBytes);
-                }
-                CloseHandle(frame);
-                if (saved) {
-                    saved = MoveFileExW(g_tempFramePath, g_framePath,
-                                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-                }
-            }
-            readback->UnlockRect();
-            result = saved ? S_OK : E_FAIL;
-            if (SUCCEEDED(result)) {
-                width = desc.Width;
-                height = desc.Height;
-            }
-        }
+HRESULT STDMETHODCALLTYPE OnReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
+    if (device == g_captureDevice) {
+        ReleaseGpuSlots();
+        g_captureDevice = nullptr;
+        if (g_frames) InterlockedIncrement(&g_frames->generation);
     }
-    if (readback) {
-        readback->Release();
-    }
-    return result;
+    return g_resetHook.stdcall<HRESULT>(device, params);
 }
 
 RwCamera* __cdecl OnShowRaster(RwCamera* camera, void* window, RwUInt32 flags) {
-    const DWORD now = GetTickCount();
-    if (now - g_lastFrameTick >= kFrameIntervalMs) {
-        g_lastFrameTick = now;
-        UINT width = 0;
-        UINT height = 0;
-        auto* device = static_cast<IDirect3DDevice9*>(GetD3DDevice());
-        const HRESULT result = device ? SaveBackBuffer(device, width, height) : E_POINTER;
-        std::ostringstream line;
-        line << "frame tick_ms=" << now << " phase=" << Phase(g_state.playerValid)
-             << " state_age_ms=" << (g_state.tick ? now - g_state.tick : 0)
-             << " state_available=" << (g_state.tick != 0);
-        if (SUCCEEDED(result)) {
-            line << " result=ok width=" << width << " height=" << height << " file=portal-frame.bmp";
-        } else {
-            line << " result=failed hresult=0x" << std::hex << static_cast<unsigned>(result);
+    if (g_bridgeInstalled && AttachFrames()) {
+        CompleteGpuSlots();
+        if (auto* device = static_cast<IDirect3DDevice9*>(GetD3DDevice())) {
+            if (!g_resetHook) {
+                auto** vtable = *reinterpret_cast<void***>(device);
+                g_resetHook = safetyhook::create_inline(vtable[16], &OnReset);
+            }
+            PublishGpuFrame(device);
         }
-        Log(line.str());
     }
-    return g_showRasterHook.ccall<RwCamera*>(camera, window, flags);
+    RwCamera* result = g_showRasterHook.ccall<RwCamera*>(camera, window, flags);
+    CompleteGpuSlots();
+    return result;
 }
 
 void OnInitRw() {
@@ -339,6 +493,16 @@ void OnInitRw() {
                                                  &OnShowRaster);
     Log(g_showRasterHook ? "Render output hook installed at RwCameraShowRaster"
                          : "Render output hook failed at RwCameraShowRaster");
+    Log(g_bridgeInstalled ? "D3D9Ex creation bridge installed" : "D3D9Ex bridge disabled or unavailable");
+    Log(portal_sa::CreatedExDevice() ? "D3D9Ex device created" : "D3D9Ex device not observed");
+    if (g_bridgeInstalled) AttachFrames();
+    if (g_bridgeInstalled) {
+        if (auto* device = static_cast<IDirect3DDevice9*>(GetD3DDevice())) {
+            auto** vtable = *reinterpret_cast<void***>(device);
+            g_resetHook = safetyhook::create_inline(vtable[16], &OnReset);
+            Log(g_resetHook ? "D3D9 Reset hook installed" : "D3D9 Reset hook failed");
+        }
+    }
 }
 
 struct PortalSA {
@@ -346,6 +510,8 @@ struct PortalSA {
         if (plugin::GetGameVersion() != GAME_10US_HOODLUM) {
             return;
         }
+        Initialize();
+        Log("PortalSA startup: native D3D9 mode");
         plugin::Events::initRwEvent += OnInitRw;
         plugin::Events::gameProcessEvent += OnGameProcess;
         plugin::Events::renderSceneEvent += OnRenderScene;
