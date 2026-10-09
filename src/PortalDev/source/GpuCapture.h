@@ -24,6 +24,7 @@ public:
     uint64_t OverwrittenFrames() const;
     uint64_t PublishDrops() const;
     std::wstring PublishStatus() const;
+    std::wstring SaConsumerStatus() const;
 
 private:
     struct Impl;

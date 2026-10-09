@@ -44,6 +44,7 @@ enum ControlId : int {
     kOverlayV = 1015,
     kOpenVLog = 1016,
     kVCaptureMode = 1017,
+    kExDiagnostic = 1018,
 };
 
 HINSTANCE g_instance{};
@@ -61,6 +62,7 @@ HWND g_vPreviewHeading{};
 HWND g_logHeading{};
 HWND g_gpuMode{};
 HWND g_vGpuMode{};
+HWND g_exMode{};
 HFONT g_uiFont{};
 HFONT g_monoFont{};
 HFONT g_headingFont{};
@@ -118,6 +120,7 @@ GpuCapture g_capture;
 GpuCapture g_vCapture;
 bool g_captureEnabled = true;
 bool g_vCaptureEnabled = true;
+bool g_exDiagnostic = false;
 DWORD g_lastCaptureAttemptTick{};
 DWORD g_lastVCaptureAttemptTick{};
 uint64_t g_lastCaptureFrames{};
@@ -223,7 +226,7 @@ bool StartSupervisor() {
         MemoryBarrier();
         g_frames->magic = portal::kMagic;
     }
-    InterlockedExchange(&g_frames->bridgeEnabled, 0);
+    InterlockedExchange(&g_frames->bridgeEnabled, g_exDiagnostic ? 1 : 0);
     QueryPerformanceFrequency(&g_qpcFrequency);
     return true;
 }
@@ -492,7 +495,9 @@ void Refresh() {
            << g_capture.AgeP95Ms() << L" ms    主动跳过旧帧：" << g_capture.DroppedFrames() << L"\r\n"
            << L"SA 共享帧：发布 " << g_capture.PublishedFrames()
            << L" / 覆盖旧帧 " << g_capture.OverwrittenFrames()
-           << L" / 跳过 " << g_capture.PublishDrops();
+           << L" / 跳过 " << g_capture.PublishDrops() << L"\r\n"
+           << g_vCapture.SaConsumerStatus() << L"；SA 前台按 F9 放置世界矩形\r\n"
+           << L"D3D9Ex 诊断：" << (g_exDiagnostic ? L"已选择，重启 SA 后生效" : L"关闭");
     UpdateText(g_saStatus, g_saStatusText, saStatus.str(), false);
 
     std::wostringstream vStatus;
@@ -705,12 +710,13 @@ void Layout(HWND window) {
     const int contentWidth = clientWidth - padding * 2;
     const int previewHeight = contentWidth * 9 / 16;
     const int headingHeight = 24;
-    const int statusHeight = 210;
+    const int statusHeight = 250;
     int y = padding;
     const int commonY = y; y += buttonHeight + gap * 2;
     const int saHeadingY = y; y += headingHeight + 4;
     const int saActionsY = y; y += buttonHeight + gap;
     const int saToolsY = y; y += buttonHeight + gap;
+    const int saDiagnosticY = y; y += buttonHeight + gap;
     const int saStatusY = y; y += statusHeight + gap;
     const int saPreviewHeadingY = y; y += headingHeight + 4;
     const int saPreviewY = y; y += previewHeight + gap * 2;
@@ -749,6 +755,7 @@ void Layout(HWND window) {
     button(kDisable, padding, saToolsY, 86);
     button(kOpenLog, padding + 86 + gap, saToolsY, 86);
     place(g_gpuMode, padding + 86 + gap + 86 + gap, saToolsY, 300, buttonHeight);
+    place(g_exMode, padding, saDiagnosticY, contentWidth, buttonHeight);
     place(g_saStatus, padding, saStatusY, contentWidth, statusHeight);
     place(g_saPreviewHeading, padding, saPreviewHeadingY, contentWidth, headingHeight);
     place(g_preview, padding, saPreviewY, contentWidth, previewHeight);
@@ -817,6 +824,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                     g_instance, nullptr);
         SendMessageW(g_gpuMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         SendMessageW(g_gpuMode, BM_SETCHECK, g_captureEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+        g_exMode = CreateWindowExW(0, L"BUTTON", L"D3D9Ex 诊断（仅 dev；切换后重启 SA）",
+                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                    0, 0, 1, 1, window,
+                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kExDiagnostic)),
+                                    g_instance, nullptr);
+        SendMessageW(g_exMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         g_vGpuMode = CreateWindowExW(0, L"BUTTON", L"V GPU 窗口生产者（可切换）",
                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                      0, 0, 1, 1, window,
@@ -905,6 +918,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         case kGpuMode:
             g_captureEnabled = SendMessageW(g_gpuMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (!g_captureEnabled) g_capture.Stop();
+            Refresh();
+            break;
+        case kExDiagnostic:
+            g_exDiagnostic = SendMessageW(g_exMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (g_frames) InterlockedExchange(&g_frames->bridgeEnabled, g_exDiagnostic ? 1 : 0);
             Refresh();
             break;
         case kVCaptureMode:

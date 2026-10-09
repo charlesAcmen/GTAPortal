@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include "GpuCapture.h"
 #include "VFramePublisher.h"
+#include "VToSAPublisher.h"
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -44,6 +45,7 @@ struct GpuCapture::Impl {
     LARGE_INTEGER qpcFrequency{};
     GpuCapture::Publication publication = GpuCapture::Publication::None;
     VFramePublisher publisher;
+    VToSAPublisher saConsumer;
 
     void EnsureSwap(UINT width, UINT height) {
         if (swap && swapWidth == width && swapHeight == height) return;
@@ -87,6 +89,7 @@ bool GpuCapture::Start(HWND gameWindow, HWND previewWindow, Publication publicat
         winrt::check_hresult(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
             D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
             impl_->device.put(), nullptr, impl_->context.put()));
+        if (publication == Publication::V) impl_->saConsumer.Start(impl_->device.get(), impl_->context.get());
         if (publication != Publication::None && !impl_->publisher.Start(impl_->device.get())) {
             const std::wstring error = impl_->publisher.Status();
             Stop();
@@ -120,6 +123,7 @@ bool GpuCapture::Start(HWND gameWindow, HWND previewWindow, Publication publicat
 bool GpuCapture::Pump() {
     if (!impl_ || !gameWindow_) return false;
     try {
+        if (impl_->publication == Publication::V) impl_->saConsumer.Poll();
         auto frame = impl_->pool.TryGetNextFrame();
         if (!frame) return false;
         while (auto newer = impl_->pool.TryGetNextFrame()) {
@@ -142,6 +146,7 @@ bool GpuCapture::Pump() {
         if (impl_->publication != Publication::None)
             impl_->publisher.Publish(impl_->context.get(), texture.get(),
                                      frame.SystemRelativeTime().count());
+        if (impl_->publication == Publication::V) impl_->saConsumer.Publish(texture.get());
         if (impl_->preview) {
             impl_->EnsureSwap(description.Width, description.Height);
             winrt::com_ptr<ID3D11Texture2D> backBuffer;
@@ -199,6 +204,10 @@ std::wstring GpuCapture::PublishStatus() const {
     return impl_ ? impl_->publisher.Status() : L"等待 GTA V 窗口";
 }
 
+std::wstring GpuCapture::SaConsumerStatus() const {
+    return impl_ ? impl_->saConsumer.Status() : L"等待 V 窗口生产者";
+}
+
 void GpuCapture::Stop() {
     gameWindow_ = nullptr;
     status_ = L"等待游戏窗口";
@@ -208,6 +217,7 @@ void GpuCapture::Stop() {
     if (!impl_) return;
     if (impl_->session) impl_->session.Close();
     if (impl_->pool) impl_->pool.Close();
+    impl_->saConsumer.Stop();
     delete impl_;
     impl_ = nullptr;
 }

@@ -14,6 +14,7 @@ namespace {
 
 safetyhook::InlineHook g_create9Hook;
 volatile LONG g_createdExDevice = 0;
+LONG g_mode = 0;
 thread_local bool g_insideCreate9 = false;
 void (*g_trace)(const char*) = nullptr;
 
@@ -38,7 +39,7 @@ public:
             AddRef();
             return S_OK;
         }
-        return legacy_->QueryInterface(iid, result);
+        return real_->QueryInterface(iid, result);
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&refs_); }
     ULONG STDMETHODCALLTYPE Release() override {
@@ -46,23 +47,31 @@ public:
         if (!refs) delete this;
         return refs;
     }
-    HRESULT STDMETHODCALLTYPE RegisterSoftwareDevice(void* function) override { return legacy_->RegisterSoftwareDevice(function); }
-    UINT STDMETHODCALLTYPE GetAdapterCount() override { return legacy_->GetAdapterCount(); }
-    HRESULT STDMETHODCALLTYPE GetAdapterIdentifier(UINT adapter, DWORD flags, D3DADAPTER_IDENTIFIER9* id) override { return legacy_->GetAdapterIdentifier(adapter, flags, id); }
-    UINT STDMETHODCALLTYPE GetAdapterModeCount(UINT adapter, D3DFORMAT format) override { return legacy_->GetAdapterModeCount(adapter, format); }
-    HRESULT STDMETHODCALLTYPE EnumAdapterModes(UINT adapter, D3DFORMAT format, UINT mode, D3DDISPLAYMODE* output) override { return legacy_->EnumAdapterModes(adapter, format, mode, output); }
-    HRESULT STDMETHODCALLTYPE GetAdapterDisplayMode(UINT adapter, D3DDISPLAYMODE* output) override { return legacy_->GetAdapterDisplayMode(adapter, output); }
-    HRESULT STDMETHODCALLTYPE CheckDeviceType(UINT adapter, D3DDEVTYPE type, D3DFORMAT display, D3DFORMAT backbuffer, BOOL windowed) override { return legacy_->CheckDeviceType(adapter, type, display, backbuffer, windowed); }
-    HRESULT STDMETHODCALLTYPE CheckDeviceFormat(UINT adapter, D3DDEVTYPE type, D3DFORMAT display, DWORD usage, D3DRESOURCETYPE resource, D3DFORMAT format) override { return legacy_->CheckDeviceFormat(adapter, type, display, usage, resource, format); }
-    HRESULT STDMETHODCALLTYPE CheckDeviceMultiSampleType(UINT adapter, D3DDEVTYPE type, D3DFORMAT format, BOOL windowed, D3DMULTISAMPLE_TYPE sample, DWORD* quality) override { return legacy_->CheckDeviceMultiSampleType(adapter, type, format, windowed, sample, quality); }
-    HRESULT STDMETHODCALLTYPE CheckDepthStencilMatch(UINT adapter, D3DDEVTYPE type, D3DFORMAT display, D3DFORMAT render, D3DFORMAT depth) override { return legacy_->CheckDepthStencilMatch(adapter, type, display, render, depth); }
-    HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT adapter, D3DDEVTYPE type, D3DFORMAT source, D3DFORMAT target) override { return legacy_->CheckDeviceFormatConversion(adapter, type, source, target); }
-    HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT adapter, D3DDEVTYPE type, D3DCAPS9* caps) override { return legacy_->GetDeviceCaps(adapter, type, caps); }
-    HMONITOR STDMETHODCALLTYPE GetAdapterMonitor(UINT adapter) override { return legacy_->GetAdapterMonitor(adapter); }
+    HRESULT STDMETHODCALLTYPE RegisterSoftwareDevice(void* function) override { return real_->RegisterSoftwareDevice(function); }
+    UINT STDMETHODCALLTYPE GetAdapterCount() override { return real_->GetAdapterCount(); }
+    HRESULT STDMETHODCALLTYPE GetAdapterIdentifier(UINT adapter, DWORD flags, D3DADAPTER_IDENTIFIER9* id) override { return real_->GetAdapterIdentifier(adapter, flags, id); }
+    UINT STDMETHODCALLTYPE GetAdapterModeCount(UINT adapter, D3DFORMAT format) override { return real_->GetAdapterModeCount(adapter, format); }
+    HRESULT STDMETHODCALLTYPE EnumAdapterModes(UINT adapter, D3DFORMAT format, UINT mode, D3DDISPLAYMODE* output) override { return real_->EnumAdapterModes(adapter, format, mode, output); }
+    HRESULT STDMETHODCALLTYPE GetAdapterDisplayMode(UINT adapter, D3DDISPLAYMODE* output) override { return real_->GetAdapterDisplayMode(adapter, output); }
+    HRESULT STDMETHODCALLTYPE CheckDeviceType(UINT adapter, D3DDEVTYPE type, D3DFORMAT display, D3DFORMAT backbuffer, BOOL windowed) override { return real_->CheckDeviceType(adapter, type, display, backbuffer, windowed); }
+    HRESULT STDMETHODCALLTYPE CheckDeviceFormat(UINT adapter, D3DDEVTYPE type, D3DFORMAT display, DWORD usage, D3DRESOURCETYPE resource, D3DFORMAT format) override { return real_->CheckDeviceFormat(adapter, type, display, usage, resource, format); }
+    HRESULT STDMETHODCALLTYPE CheckDeviceMultiSampleType(UINT adapter, D3DDEVTYPE type, D3DFORMAT format, BOOL windowed, D3DMULTISAMPLE_TYPE sample, DWORD* quality) override { return real_->CheckDeviceMultiSampleType(adapter, type, format, windowed, sample, quality); }
+    HRESULT STDMETHODCALLTYPE CheckDepthStencilMatch(UINT adapter, D3DDEVTYPE type, D3DFORMAT display, D3DFORMAT render, D3DFORMAT depth) override { return real_->CheckDepthStencilMatch(adapter, type, display, render, depth); }
+    HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT adapter, D3DDEVTYPE type, D3DFORMAT source, D3DFORMAT target) override { return real_->CheckDeviceFormatConversion(adapter, type, source, target); }
+    HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT adapter, D3DDEVTYPE type, D3DCAPS9* caps) override { return real_->GetDeviceCaps(adapter, type, caps); }
+    HMONITOR STDMETHODCALLTYPE GetAdapterMonitor(UINT adapter) override { return real_->GetAdapterMonitor(adapter); }
     HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags,
                                            D3DPRESENT_PARAMETERS* params, IDirect3DDevice9** device) override {
         if (!device) return D3DERR_INVALIDCALL;
         *device = nullptr;
+        if (g_trace && params) {
+            char message[160]{};
+            std::snprintf(message, sizeof(message),
+                "D3D9Ex bridge CreateDevice adapter=%u windowed=%d backbuffer=%ux%u format=%u flags=0x%X",
+                adapter, params->Windowed, params->BackBufferWidth, params->BackBufferHeight,
+                static_cast<unsigned>(params->BackBufferFormat), flags);
+            g_trace(message);
+        }
         IDirect3DDevice9Ex* ex = nullptr;
         D3DDISPLAYMODEEX fullscreen{};
         fullscreen.Size = sizeof(fullscreen);
@@ -131,13 +140,15 @@ bool InstallD3D9ExBridge(void (*trace)(const char*)) {
     if (!mapping) return false;
     const auto* frames = static_cast<const portal::SharedFrames*>(
         MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(portal::SharedFrames)));
-    const bool enabled = frames && frames->magic == portal::kMagic &&
+    const bool valid = frames && frames->magic == portal::kMagic &&
         frames->version == portal::kVersion && frames->size == sizeof(portal::SharedFrames) &&
         frames->bridgeEnabled != 0;
+    g_mode = valid ? frames->bridgeEnabled : 0;
     if (frames) UnmapViewOfFile(frames);
     CloseHandle(mapping);
-    if (!enabled) return false;
+    if (!g_mode) return false;
     HMODULE d3d9 = GetModuleHandleW(L"d3d9.dll");
+    if (!d3d9) d3d9 = LoadLibraryW(L"d3d9.dll");
     if (!d3d9) return false;
     auto* create9 = GetProcAddress(d3d9, "Direct3DCreate9");
     if (!create9) return false;
@@ -146,5 +157,6 @@ bool InstallD3D9ExBridge(void (*trace)(const char*)) {
 }
 
 bool CreatedExDevice() { return InterlockedCompareExchange(&g_createdExDevice, 0, 0) != 0; }
+LONG BridgeMode() { return g_mode; }
 
 } // namespace portal_sa

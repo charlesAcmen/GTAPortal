@@ -1,6 +1,6 @@
 # GTAPortal
 
-GTAPortal explores a real-time portal between GTA San Andreas and GTA V Enhanced. PortalDev captures both game windows through Windows Graphics Capture and publishes their frames as separate three-slot D3D11 shared-texture channels, without a full-frame CPU readback. PortalV is an x64 Script Hook V ASI and ReShade add-on with a candidate SA→V consumer: F9 anchors a world-fixed picture plane, and the effect uses GTA V scene depth for visual occlusion. Only PortalV's script entry and diagnostic HUD were observed in Enhanced Story Mode on 2026-10-09; SA picture display and occlusion still need in-game acceptance. GTA V capture runs outside the game; the reverse V→SA game-side consumer remains a later milestone.
+GTAPortal explores a real-time portal between GTA San Andreas and GTA V Enhanced. PortalDev captures both game windows through Windows Graphics Capture and publishes their frames as separate three-slot D3D11 shared-texture channels, without a full-frame CPU readback. PortalV is an x64 Script Hook V ASI and ReShade add-on with a candidate SA→V consumer: F9 anchors a world-fixed picture plane, and the effect uses GTA V scene depth for visual occlusion. Only PortalV's script entry and diagnostic HUD were observed in Enhanced Story Mode on 2026-10-09; SA picture display and occlusion still need in-game acceptance. A candidate V→SA consumer now draws PortalDev's GTA V capture on a depth-tested SA world rectangle through D3D9/D3D11 GPU sharing. This reverse path has not been built or accepted in-game yet.
 
 ## Clone on another device
 
@@ -49,7 +49,7 @@ The second command builds the pinned upstream source as x86 and copies only its 
 
 ## Repository layout
 
-- `src/PortalSA/`: x86 ASI and camera probe. The earlier D3D9Ex bridge experiment remains disabled after it prevented the game from starting.
+- `src/PortalSA/`: x86 ASI, camera probe, and candidate V→SA world rectangle. The earlier D3D9Ex bridge is available only through an opt-in development diagnostic switch.
 - `src/PortalV/`: x64 Enhanced ASI with the camera probe and candidate SA→V ReShade picture plane.
 - `src/PortalDev/`: x64 development tool with WGC preview and independent SA/V shared GPU frame channels.
 - `src/PortalVFrames.h`: latest-frame, three-slot GPU texture publishing protocol for both games.

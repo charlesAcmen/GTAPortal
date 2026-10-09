@@ -83,7 +83,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
-      <AdditionalDependencies>Plugin.lib;d3d9.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Plugin.lib;d3d9.lib;dxguid.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(PLUGIN_SDK_DIR)\output\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>bin\GTA-SA\Release\PortalSA.lib</ImportLibrary>
     </Link>
@@ -108,7 +108,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>Plugin_d.lib;d3d9.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Plugin_d.lib;d3d9.lib;dxguid.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(PLUGIN_SDK_DIR)\output\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>bin\GTA-SA\Debug\PortalSA.lib</ImportLibrary>
     </Link>
@@ -119,6 +119,7 @@
     <ClCompile Include="source\D3D9ExBridge.cpp" />
     <ClCompile Include="source\Main.cpp" />
     <ClCompile Include="source\StateCapture.cpp" />
+    <ClCompile Include="source\VConsumer.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

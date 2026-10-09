@@ -19,6 +19,7 @@
 
 #include "D3D9ExBridge.h"
 #include "StateCapture.h"
+#include "VConsumer.h"
 #include "../../PortalProtocol.h"
 
 namespace {
@@ -97,11 +98,17 @@ bool Initialize() {
 }
 
 void OnGameProcess() {
-    if (Initialize()) portal_sa::state::OnGameProcess(Log);
+    if (Initialize()) {
+        portal_sa::state::OnGameProcess(Log);
+        portal_sa::v_consumer::OnGameProcess([](const char* message) { Log(message); });
+    }
 }
 
 void OnRenderScene() {
-    if (g_supported) portal_sa::state::OnRenderScene();
+    if (!g_supported) return;
+    portal_sa::state::OnRenderScene();
+    portal_sa::v_consumer::OnRenderScene(static_cast<IDirect3DDevice9*>(GetD3DDevice()),
+        [](const char* message) { Log(message); });
 }
 
 int64_t Qpc() {
@@ -321,6 +328,7 @@ void PublishGpuFrame(IDirect3DDevice9* device) {
 }
 
 HRESULT STDMETHODCALLTYPE OnReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
+    portal_sa::v_consumer::BeforeReset();
     if (device == g_captureDevice) {
         ReleaseGpuSlots();
         g_captureDevice = nullptr;
@@ -330,7 +338,8 @@ HRESULT STDMETHODCALLTYPE OnReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETER
 }
 
 RwCamera* __cdecl OnShowRaster(RwCamera* camera, void* window, RwUInt32 flags) {
-    if (g_bridgeInstalled && AttachFrames()) {
+    // Diagnostic mode 1 probes D3D9Ex for the V consumer only. Mode 2 keeps the old SA producer experiment.
+    if (g_bridgeInstalled && portal_sa::BridgeMode() == 2 && AttachFrames()) {
         CompleteGpuSlots();
         if (auto* device = static_cast<IDirect3DDevice9*>(GetD3DDevice())) {
             if (!g_resetHook) {
@@ -355,13 +364,11 @@ void OnInitRw() {
                          : "Render output hook failed at RwCameraShowRaster");
     Log(g_bridgeInstalled ? "D3D9Ex creation bridge installed" : "D3D9Ex bridge disabled or unavailable");
     Log(portal_sa::CreatedExDevice() ? "D3D9Ex device created" : "D3D9Ex device not observed");
-    if (g_bridgeInstalled) AttachFrames();
-    if (g_bridgeInstalled) {
-        if (auto* device = static_cast<IDirect3DDevice9*>(GetD3DDevice())) {
-            auto** vtable = *reinterpret_cast<void***>(device);
-            g_resetHook = safetyhook::create_inline(vtable[16], &OnReset);
-            Log(g_resetHook ? "D3D9 Reset hook installed" : "D3D9 Reset hook failed");
-        }
+    if (g_bridgeInstalled && portal_sa::BridgeMode() == 2) AttachFrames();
+    if (auto* device = static_cast<IDirect3DDevice9*>(GetD3DDevice())) {
+        auto** vtable = *reinterpret_cast<void***>(device);
+        g_resetHook = safetyhook::create_inline(vtable[16], &OnReset);
+        Log(g_resetHook ? "D3D9 Reset hook installed" : "D3D9 Reset hook failed");
     }
 }
 
@@ -371,7 +378,10 @@ struct PortalSA {
             return;
         }
         Initialize();
-        Log("PortalSA startup: native D3D9 mode");
+        g_bridgeInstalled = portal_sa::InstallD3D9ExBridge(
+            [](const char* message) { Log(message); });
+        Log(g_bridgeInstalled ? "PortalSA startup: D3D9Ex diagnostic mode"
+                              : "PortalSA startup: native D3D9 mode");
         plugin::Events::initRwEvent += OnInitRw;
         plugin::Events::gameProcessEvent += OnGameProcess;
         plugin::Events::renderSceneEvent += OnRenderScene;
