@@ -79,9 +79,18 @@ if (-not (Test-Path -LiteralPath $devScripts)) {
 Copy-Item -LiteralPath $builtAsi -Destination $devScripts -Force
 Copy-Item -LiteralPath $config -Destination $devScripts -Force
 
+# Compatibility settings are keyed by the full EXE path; the clean copy's DPI setting
+# does not apply to the dev copy, even though their EXE hashes are identical.
+$devGame = Join-Path (Split-Path -Parent $devScripts) 'gta-sa.EXE'
+$layers = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
+New-Item -Path $layers -Force | Out-Null
+New-ItemProperty -Path $layers -Name $devGame -PropertyType String `
+    -Value '~ HIGHDPIAWARE' -Force | Out-Null
+
 Write-Host ''
 Write-Host 'WindowedMode installed in the dev game only:'
 Get-Item -LiteralPath `
     (Join-Path $devScripts 'III.VC.SA.WindowedMode.asi'), `
     (Join-Path $devScripts 'III.VC.SA.WindowedMode.ini') |
     Select-Object FullName, Length, LastWriteTime
+Write-Host "Dev game DPI compatibility: $devGame = ~ HIGHDPIAWARE"
