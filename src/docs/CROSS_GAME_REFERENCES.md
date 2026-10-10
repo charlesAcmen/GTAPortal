@@ -23,7 +23,7 @@ PortalDev 的 D3D11 纹理
 
 所以说 **SA 画面生产者已经可用** 是对的：你确实在工具中看到了实时 SA 画面。这里的“生产”指 SA 正常渲染、Windows 捕获并交给 PortalDev。当前没有把整帧复制到 CPU 再传送。
 
-跨进程发布现在也有独立 SA 通道。`CaptureGameFrame()` 使用 `GpuCapture::Publication::Sa`，V 窗口捕获使用 `Publication::V`。两者都发布三槽命名 D3D11 纹理；`PortalV.asi` 的 ReShade add-on 读取 SA 通道并复制到 D3D12 显示纹理。独立 GPU 测试已通过；完整游戏内显示和深度遮挡仍待实测，细节见 [SA → V 里程碑](MILESTONE_SA_TO_V_2026-10-09.md)。
+跨进程发布现在有独立的 SA→V 通道。`CaptureGameFrame()` 使用 `GpuCapture::Publication::Sa` 发布三槽命名 GPU 纹理；`PortalV.asi` 的 ReShade add-on 读取该通道并复制到 GTA V 的显示纹理。V 窗口捕获不再额外发布无人消费的 `VFrames`，而是直接走 V→SA 的三槽转换路径。独立 GPU 测试已通过；完整游戏内显示和深度遮挡仍待实测，细节见 [SA → V 里程碑](MILESTONE_SA_TO_V_2026-10-09.md)。
 
 `D3D9` 是 SA 使用的旧版图形接口。早先尝试 `D3D9Ex`，目的是让 **SA 游戏进程自己** 导出共享纹理；这个实验导致启动故障，相关开关保持关闭。当前成功的预览和新增共享发布通过 Windows 的窗口捕获取得画面，**不依赖**那个实验。
 

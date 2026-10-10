@@ -6,10 +6,10 @@
 #include <array>
 #include <cstdio>
 
-#include "../PortalDev/source/VFramePublisher.h"
-#include "../PortalVFrames.h"
+#include "../PortalDev/source/SAFramePublisher.h"
+#include "../SAToVFrames.h"
 
-int TestChannel(VFramePublisher::Source channel) {
+int wmain() {
     winrt::com_ptr<ID3D11Device> writerDevice;
     winrt::com_ptr<ID3D11DeviceContext> writerContext;
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
@@ -29,28 +29,26 @@ int TestChannel(VFramePublisher::Source channel) {
     winrt::com_ptr<ID3D11Texture2D> source;
     if (FAILED(writerDevice->CreateTexture2D(&description, &data, source.put()))) return 2;
 
-    VFramePublisher publisher(channel);
+    SAFramePublisher publisher;
     if (!publisher.Start(writerDevice.get())) return 3;
     if (!publisher.Publish(writerContext.get(), source.get(), 123456)) return 4;
 
     HANDLE mapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE,
-                                      channel == VFramePublisher::Source::Sa
-                                          ? portal_v_frames::kSaMappingName : portal_v_frames::kMappingName);
+                                      sa_to_v_frames::kMappingName);
     if (!mapping) return 5;
-    auto* frames = static_cast<portal_v_frames::SharedFrames*>(MapViewOfFile(
-        mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(portal_v_frames::SharedFrames)));
+    auto* frames = static_cast<sa_to_v_frames::SharedFrames*>(MapViewOfFile(
+        mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(sa_to_v_frames::SharedFrames)));
     if (!frames) return 6;
     int ready = -1;
-    for (int index = 0; index < portal_v_frames::kSlotCount; ++index) {
+    for (int index = 0; index < sa_to_v_frames::kSlotCount; ++index) {
         if (InterlockedCompareExchange(&frames->slots[index].state,
-                                       portal_v_frames::kReading,
-                                       portal_v_frames::kReady) == portal_v_frames::kReady) {
+                                       sa_to_v_frames::kReading,
+                                       sa_to_v_frames::kReady) == sa_to_v_frames::kReady) {
             ready = index;
             break;
         }
     }
-    if (ready < 0 || frames->magic != (channel == VFramePublisher::Source::Sa
-        ? portal_v_frames::kSaMagic : portal_v_frames::kMagic)) return 7;
+    if (ready < 0 || frames->magic != sa_to_v_frames::kMagic) return 7;
 
     winrt::com_ptr<ID3D11Device> readerDevice;
     winrt::com_ptr<ID3D11DeviceContext> readerContext;
@@ -75,7 +73,7 @@ int TestChannel(VFramePublisher::Source channel) {
     if (FAILED(readerContext->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped))) return 13;
     const uint32_t color = *static_cast<const uint32_t*>(mapped.pData);
     readerContext->Unmap(staging.get(), 0);
-    InterlockedExchange(&frames->slots[ready].state, portal_v_frames::kFree);
+    InterlockedExchange(&frames->slots[ready].state, sa_to_v_frames::kFree);
     if (color != 0xFF11AA77) return 14;
 
     for (int index = 0; index < 10; ++index) publisher.Publish(writerContext.get(), source.get(), 123456 + index);
@@ -84,17 +82,10 @@ int TestChannel(VFramePublisher::Source channel) {
     publisher.Stop();
     if (!publisher.Start(writerDevice.get()) || !publisher.Publish(writerContext.get(), source.get(), 123999) ||
         frames->generation == firstGeneration) return 16;
-    std::printf("%s shared texture smoke passed: produced=%llu overwritten=%llu\n",
-                channel == VFramePublisher::Source::Sa ? "SA" : "V",
+    std::printf("SA shared texture smoke passed: produced=%llu overwritten=%llu\n",
                 static_cast<unsigned long long>(publisher.Produced()),
                 static_cast<unsigned long long>(publisher.Overwritten()));
     UnmapViewOfFile(frames);
     CloseHandle(mapping);
     return 0;
-}
-
-int wmain() {
-    const int sa = TestChannel(VFramePublisher::Source::Sa);
-    if (sa) return 100 + sa;
-    return TestChannel(VFramePublisher::Source::V);
 }

@@ -1,10 +1,11 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include "GpuCapture.h"
-#include "VFramePublisher.h"
+#include "SAFramePublisher.h"
 #include "VToSAPublisher.h"
 
 #include <d3d11.h>
+#include <dwmapi.h>
 #include <dxgi1_2.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
@@ -14,6 +15,7 @@
 
 #include <sstream>
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace {
@@ -30,7 +32,6 @@ std::wstring ErrorText(HRESULT error) {
 }
 
 struct GpuCapture::Impl {
-    explicit Impl(VFramePublisher::Source source) : publisher(source) {}
     winrt::com_ptr<ID3D11Device> device;
     winrt::com_ptr<ID3D11DeviceContext> context;
     winrt::com_ptr<IDXGISwapChain1> swap;
@@ -41,11 +42,124 @@ struct GpuCapture::Impl {
     SizeInt32 poolSize{};
     UINT swapWidth = 0;
     UINT swapHeight = 0;
+    winrt::com_ptr<ID3D11Texture2D> clientTexture;
+    UINT clientWidth = 0;
+    UINT clientHeight = 0;
     HWND preview = nullptr;
+    HWND gameWindow = nullptr;
     LARGE_INTEGER qpcFrequency{};
     GpuCapture::Publication publication = GpuCapture::Publication::None;
-    VFramePublisher publisher;
+    SAFramePublisher publisher;
     VToSAPublisher saConsumer;
+    std::wstring cropStatus = L"等待客户区裁剪";
+
+    ID3D11Texture2D* CropToClient(ID3D11Texture2D* source, D3D11_TEXTURE2D_DESC& description) {
+        // PortalDev has no DPI-awareness manifest. Without overriding the calling
+        // thread here, User32 may return virtualized coordinates while WGC/DWM use
+        // physical pixels, which makes the bounds check silently reject cropping.
+        const DPI_AWARENESS_CONTEXT previousDpi = SetThreadDpiAwarenessContext(
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        RECT client{};
+        POINT clientOrigin{};
+        const bool hasClient = gameWindow && GetClientRect(gameWindow, &client) &&
+            ClientToScreen(gameWindow, &clientOrigin);
+        if (previousDpi) SetThreadDpiAwarenessContext(previousDpi);
+        if (!hasClient) {
+            cropStatus = L"客户区裁剪失败：无法读取窗口坐标";
+            return source;
+        }
+        const LONG width = client.right - client.left;
+        const LONG height = client.bottom - client.top;
+        if (width <= 0 || height <= 0) {
+            cropStatus = L"客户区裁剪失败：客户区尺寸无效";
+            return source;
+        }
+
+        RECT windowBounds{};
+        RECT extendedBounds{};
+        const DPI_AWARENESS_CONTEXT previousBoundsDpi = SetThreadDpiAwarenessContext(
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        const bool hasWindowBounds = GetWindowRect(gameWindow, &windowBounds) != FALSE;
+        const bool hasExtendedBounds = SUCCEEDED(DwmGetWindowAttribute(
+            gameWindow, DWMWA_EXTENDED_FRAME_BOUNDS, &extendedBounds, sizeof(extendedBounds)));
+        if (previousBoundsDpi) SetThreadDpiAwarenessContext(previousBoundsDpi);
+        if (!hasWindowBounds && !hasExtendedBounds) {
+            cropStatus = L"客户区裁剪失败：无法读取窗口边界";
+            return source;
+        }
+
+        auto sizeError = [&description](const RECT& bounds) {
+            return std::abs((bounds.right - bounds.left) - static_cast<LONG>(description.Width)) +
+                std::abs((bounds.bottom - bounds.top) - static_cast<LONG>(description.Height));
+        };
+        RECT captureBounds = hasExtendedBounds ? extendedBounds : windowBounds;
+        if (hasWindowBounds && (!hasExtendedBounds || sizeError(windowBounds) < sizeError(extendedBounds)))
+            captureBounds = windowBounds;
+
+        const LONG captureWidth = captureBounds.right - captureBounds.left;
+        const LONG captureHeight = captureBounds.bottom - captureBounds.top;
+        if (captureWidth <= 0 || captureHeight <= 0) {
+            cropStatus = L"客户区裁剪失败：捕获边界尺寸无效";
+            return source;
+        }
+
+        // WGC texture pixels are physical, but its content size can differ by a
+        // pixel or by a DPI scale from the bounds reported by older windows.
+        const double scaleX = static_cast<double>(description.Width) / captureWidth;
+        const double scaleY = static_cast<double>(description.Height) / captureHeight;
+        const LONG left = static_cast<LONG>(std::llround((clientOrigin.x - captureBounds.left) * scaleX));
+        const LONG top = static_cast<LONG>(std::llround((clientOrigin.y - captureBounds.top) * scaleY));
+        const LONG right = static_cast<LONG>(std::llround(
+            (clientOrigin.x - captureBounds.left + width) * scaleX));
+        const LONG bottom = static_cast<LONG>(std::llround(
+            (clientOrigin.y - captureBounds.top + height) * scaleY));
+        const LONG croppedWidth = right - left;
+        const LONG croppedHeight = bottom - top;
+        if (left < 0 || top < 0 || right > static_cast<LONG>(description.Width) ||
+            bottom > static_cast<LONG>(description.Height) || croppedWidth <= 0 || croppedHeight <= 0) {
+            std::wostringstream status;
+            status << L"客户区裁剪失败：纹理 " << description.Width << L'x' << description.Height
+                   << L"，边界 " << captureWidth << L'x' << captureHeight
+                   << L"，裁剪框 " << left << L',' << top << L'-' << right << L',' << bottom;
+            cropStatus = status.str();
+            return source;
+        }
+        if (left == 0 && top == 0 && croppedWidth == static_cast<LONG>(description.Width) &&
+            croppedHeight == static_cast<LONG>(description.Height)) {
+            cropStatus = L"客户区与捕获纹理相同，无需裁剪";
+            return source;
+        }
+
+        if (!clientTexture || clientWidth != static_cast<UINT>(croppedWidth) ||
+            clientHeight != static_cast<UINT>(croppedHeight)) {
+            D3D11_TEXTURE2D_DESC cropped = description;
+            cropped.Width = croppedWidth;
+            cropped.Height = croppedHeight;
+            cropped.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            cropped.CPUAccessFlags = 0;
+            cropped.MiscFlags = 0;
+            cropped.Usage = D3D11_USAGE_DEFAULT;
+            clientTexture = nullptr;
+            winrt::check_hresult(device->CreateTexture2D(&cropped, nullptr, clientTexture.put()));
+            clientWidth = cropped.Width;
+            clientHeight = cropped.Height;
+        }
+        D3D11_BOX box{};
+        box.left = left;
+        box.top = top;
+        box.front = 0;
+        box.right = right;
+        box.bottom = bottom;
+        box.back = 1;
+        context->CopySubresourceRegion(clientTexture.get(), 0, 0, 0, 0, source, 0, &box);
+        description.Width = clientWidth;
+        description.Height = clientHeight;
+        std::wostringstream status;
+        status << L"GPU 客户区裁剪正常 " << description.Width << L'x' << description.Height
+               << L"（偏移 " << left << L',' << top << L"）";
+        cropStatus = status.str();
+        return clientTexture.get();
+    }
 
     void EnsureSwap(UINT width, UINT height) {
         if (swap && swapWidth == width && swapHeight == height) return;
@@ -81,16 +195,16 @@ bool GpuCapture::Start(HWND gameWindow, HWND previewWindow, Publication publicat
             status_ = L"系统不支持 GPU 窗口捕获";
             return false;
         }
-        impl_ = new Impl(publication == Publication::Sa
-            ? VFramePublisher::Source::Sa : VFramePublisher::Source::V);
+        impl_ = new Impl();
         impl_->preview = previewWindow;
+        impl_->gameWindow = gameWindow;
         impl_->publication = publication;
         QueryPerformanceFrequency(&impl_->qpcFrequency);
         winrt::check_hresult(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
             D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
             impl_->device.put(), nullptr, impl_->context.put()));
         if (publication == Publication::V) impl_->saConsumer.Start(impl_->device.get(), impl_->context.get());
-        if (publication != Publication::None && !impl_->publisher.Start(impl_->device.get())) {
+        if (publication == Publication::Sa && !impl_->publisher.Start(impl_->device.get())) {
             const std::wstring error = impl_->publisher.Status();
             Stop();
             status_ = error;
@@ -143,15 +257,16 @@ bool GpuCapture::Pump() {
         winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()));
         D3D11_TEXTURE2D_DESC description{};
         texture->GetDesc(&description);
-        if (impl_->publication != Publication::None)
-            impl_->publisher.Publish(impl_->context.get(), texture.get(),
+        ID3D11Texture2D* content = impl_->CropToClient(texture.get(), description);
+        if (impl_->publication == Publication::Sa)
+            impl_->publisher.Publish(impl_->context.get(), content,
                                      frame.SystemRelativeTime().count());
-        if (impl_->publication == Publication::V) impl_->saConsumer.Publish(texture.get());
+        if (impl_->publication == Publication::V) impl_->saConsumer.Publish(content);
         if (impl_->preview) {
             impl_->EnsureSwap(description.Width, description.Height);
             winrt::com_ptr<ID3D11Texture2D> backBuffer;
             winrt::check_hresult(impl_->swap->GetBuffer(0, __uuidof(ID3D11Texture2D), backBuffer.put_void()));
-            impl_->context->CopyResource(backBuffer.get(), texture.get());
+            impl_->context->CopyResource(backBuffer.get(), content);
             backBuffer = nullptr;
             winrt::check_hresult(impl_->swap->Present(0, 0));
         }
@@ -171,7 +286,9 @@ bool GpuCapture::Pump() {
         width_ = description.Width;
         height_ = description.Height;
         ++frames_;
-        status_ = impl_->publication != Publication::None ? impl_->publisher.Status() : L"GPU 窗口捕获正常";
+        status_ = impl_->publication == Publication::Sa
+            ? impl_->publisher.Status() + L"；" + impl_->cropStatus
+            : impl_->cropStatus;
         return true;
     } catch (const winrt::hresult_error& error) {
         Stop();

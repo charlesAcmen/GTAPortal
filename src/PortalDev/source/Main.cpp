@@ -1,7 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <d3d9.h>
 #include <shellapi.h>
 #include <winrt/base.h>
 
@@ -19,6 +18,7 @@
 #include "GamePaths.h"
 #include "GameProcess.h"
 #include "PortalVClient.h"
+#include "legacy/diagnostics/SaGpuPreview.h"
 
 namespace fs = std::filesystem;
 
@@ -85,33 +85,8 @@ bool g_vConnected{};
 HANDLE g_mapping{};
 HANDLE g_supervisorMutex{};
 portal::SharedFrames* g_frames{};
-IDirect3D9Ex* g_d3d{};
-IDirect3DDevice9Ex* g_device{};
-IDirect3DQuery9* g_readQuery{};
-std::array<IDirect3DTexture9*, portal::kSlotCount> g_sharedTextures{};
-std::array<uint64_t, portal::kSlotCount> g_openHandles{};
-LONG g_openGeneration{};
-int g_readingSlot = -1;
-uint64_t g_lastFrameId{};
-uint64_t g_received{};
-double g_lastAgeMs{};
-double g_ageP95Ms{};
-double g_lastGpuReadyMs{};
-double g_lastSubmitMs{};
-bool g_lastCameraValid{};
-std::array<float, 3> g_lastCameraPosition{};
-float g_lastFov{};
-uint32_t g_lastStateAgeMs{};
-std::wstring g_gpuStatus = L"等待 SA 生产者";
 LARGE_INTEGER g_qpcFrequency{};
 int64_t g_lastRefreshQpc{};
-LONG g_lastProduced{};
-uint64_t g_lastReceived{};
-double g_producerFps{};
-double g_consumerFps{};
-std::array<double, 600> g_ageSamples{};
-size_t g_ageCount{};
-size_t g_ageNext{};
 int g_scrollY{};
 std::wstring g_saStatusText;
 std::wstring g_vStatusText;
@@ -120,6 +95,8 @@ GpuCapture g_capture;
 GpuCapture g_vCapture;
 bool g_captureEnabled = true;
 bool g_vCaptureEnabled = true;
+// Diagnostic builds intentionally start at the currently selected staged test.
+// Keep the UI state and the shared control value in sync at startup.
 bool g_exDiagnostic = false;
 DWORD g_lastCaptureAttemptTick{};
 DWORD g_lastVCaptureAttemptTick{};
@@ -226,7 +203,7 @@ bool StartSupervisor() {
         MemoryBarrier();
         g_frames->magic = portal::kMagic;
     }
-    InterlockedExchange(&g_frames->bridgeEnabled, g_exDiagnostic ? 1 : 0);
+    InterlockedExchange(&g_frames->bridgeEnabled, g_exDiagnostic ? 3 : 0);
     QueryPerformanceFrequency(&g_qpcFrequency);
     return true;
 }
@@ -235,151 +212,6 @@ int64_t Qpc() {
     LARGE_INTEGER value{};
     QueryPerformanceCounter(&value);
     return value.QuadPart;
-}
-
-void ReleaseSharedTextures() {
-    for (int index = 0; index < portal::kSlotCount; ++index) {
-        if (g_sharedTextures[index]) g_sharedTextures[index]->Release();
-        g_sharedTextures[index] = nullptr;
-        g_openHandles[index] = 0;
-    }
-}
-
-bool StartPreviewDevice() {
-    if (g_device) return true;
-    if (!g_d3d && FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &g_d3d))) {
-        g_gpuStatus = L"D3D9Ex 初始化失败";
-        return false;
-    }
-    UINT adapter = D3DADAPTER_DEFAULT;
-    bool matched = false;
-    for (UINT index = 0; index < g_d3d->GetAdapterCount(); ++index) {
-        LUID luid{};
-        if (SUCCEEDED(g_d3d->GetAdapterLUID(index, &luid)) &&
-            luid.LowPart == g_frames->adapterLuidLow && luid.HighPart == g_frames->adapterLuidHigh) {
-            adapter = index;
-            matched = true;
-            break;
-        }
-    }
-    if (!matched) {
-        g_gpuStatus = L"未找到与 SA 相同的显卡适配器";
-        return false;
-    }
-    D3DPRESENT_PARAMETERS params{};
-    params.BackBufferWidth = 640;
-    params.BackBufferHeight = 360;
-    params.BackBufferFormat = D3DFMT_X8R8G8B8;
-    params.BackBufferCount = 1;
-    params.MultiSampleType = D3DMULTISAMPLE_NONE;
-    params.SwapEffect = D3DSWAPEFFECT_DISCARD;
-    params.hDeviceWindow = g_preview;
-    params.Windowed = TRUE;
-    params.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
-    HRESULT result = g_d3d->CreateDeviceEx(adapter, D3DDEVTYPE_HAL, g_preview,
-                                            D3DCREATE_HARDWARE_VERTEXPROCESSING,
-                                            &params, nullptr, &g_device);
-    if (SUCCEEDED(result)) result = g_device->CreateQuery(D3DQUERYTYPE_EVENT, &g_readQuery);
-    if (FAILED(result)) {
-        if (g_device) { g_device->Release(); g_device = nullptr; }
-        std::wostringstream message;
-        message << L"预览设备创建失败 0x" << std::hex << static_cast<unsigned>(result);
-        g_gpuStatus = message.str();
-        return false;
-    }
-    g_gpuStatus = L"GPU 预览设备已连接";
-    return true;
-}
-
-void ConsumeGpuFrame() {
-    if (!g_frames || !g_frames->producerPid) return;
-    const LONG generation = InterlockedCompareExchange(&g_frames->generation, 0, 0);
-    if (!generation) return;
-    if (g_readingSlot >= 0) {
-        const HRESULT done = g_readQuery->GetData(nullptr, 0, 0);
-        if (done == S_FALSE) return;
-        InterlockedCompareExchange(&g_frames->slots[g_readingSlot].state,
-                                   portal::kFree, portal::kReading);
-        g_readingSlot = -1;
-        if (FAILED(done)) {
-            g_gpuStatus = L"GPU 消费完成查询失败";
-            return;
-        }
-        ++g_received;
-    }
-    if (g_openGeneration != generation) {
-        ReleaseSharedTextures();
-        g_openGeneration = generation;
-        g_lastFrameId = 0;
-        g_ageCount = 0;
-        g_ageNext = 0;
-        g_ageP95Ms = 0;
-    }
-    if (!StartPreviewDevice()) return;
-
-    int newest = -1;
-    for (int index = 0; index < portal::kSlotCount; ++index) {
-        auto& slot = g_frames->slots[index];
-        if (InterlockedCompareExchange(&slot.state, 0, 0) == portal::kReady &&
-            slot.frameId > g_lastFrameId &&
-            (newest < 0 || slot.frameId > g_frames->slots[newest].frameId)) newest = index;
-    }
-    if (newest < 0) return;
-    auto& slot = g_frames->slots[newest];
-    if (InterlockedCompareExchange(&slot.state, portal::kReading, portal::kReady) != portal::kReady) return;
-    if (g_openHandles[newest] != slot.sharedHandle) {
-        if (g_sharedTextures[newest]) g_sharedTextures[newest]->Release();
-        g_sharedTextures[newest] = nullptr;
-        HANDLE handle = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(slot.sharedHandle));
-        const HRESULT opened = g_device->CreateTexture(slot.width, slot.height, 1,
-            D3DUSAGE_RENDERTARGET, static_cast<D3DFORMAT>(slot.format), D3DPOOL_DEFAULT,
-            &g_sharedTextures[newest], &handle);
-        if (FAILED(opened)) {
-            std::wostringstream message;
-            message << L"共享纹理打开失败 0x" << std::hex << static_cast<unsigned>(opened);
-            g_gpuStatus = message.str();
-            InterlockedExchange(&slot.state, portal::kFree);
-            return;
-        }
-        g_openHandles[newest] = slot.sharedHandle;
-    }
-
-    IDirect3DSurface9* source = nullptr;
-    IDirect3DSurface9* target = nullptr;
-    HRESULT result = g_sharedTextures[newest]->GetSurfaceLevel(0, &source);
-    if (SUCCEEDED(result)) result = g_device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &target);
-    if (SUCCEEDED(result)) result = g_device->StretchRect(source, nullptr, target, nullptr, D3DTEXF_LINEAR);
-    if (source) source->Release();
-    if (target) target->Release();
-    if (SUCCEEDED(result)) result = g_readQuery->Issue(D3DISSUE_END);
-    if (SUCCEEDED(result)) {
-        g_readingSlot = newest;
-        RECT destination{};
-        GetClientRect(g_preview, &destination);
-        result = g_device->PresentEx(nullptr, &destination, nullptr, nullptr, 0);
-    }
-    if (FAILED(result)) {
-        if (g_readingSlot < 0) InterlockedExchange(&slot.state, portal::kFree);
-        std::wostringstream message;
-        message << L"GPU 预览失败 0x" << std::hex << static_cast<unsigned>(result);
-        g_gpuStatus = message.str();
-        return;
-    }
-    const int64_t now = Qpc();
-    g_lastFrameId = slot.frameId;
-    g_lastAgeMs = 1000.0 * static_cast<double>(now - slot.captureQpc) / g_qpcFrequency.QuadPart;
-    g_ageSamples[g_ageNext] = g_lastAgeMs;
-    g_ageNext = (g_ageNext + 1) % g_ageSamples.size();
-    if (g_ageCount < g_ageSamples.size()) ++g_ageCount;
-    g_lastGpuReadyMs = 1000.0 * static_cast<double>(slot.readyQpc - slot.captureQpc) / g_qpcFrequency.QuadPart;
-    g_lastSubmitMs = slot.submitUs / 1000.0;
-    g_lastCameraValid = slot.cameraValid != 0;
-    g_lastCameraPosition[0] = slot.cameraPosition[0];
-    g_lastCameraPosition[1] = slot.cameraPosition[1];
-    g_lastCameraPosition[2] = slot.cameraPosition[2];
-    g_lastFov = slot.fovDegrees;
-    g_lastStateAgeMs = slot.stateAgeMs;
-    g_gpuStatus = L"GPU 帧链路正常";
 }
 
 void CaptureGameFrame() {
@@ -443,12 +275,6 @@ void UpdateText(HWND control, std::wstring& previous, const std::wstring& next, 
 
 void Refresh() {
     if (!g_gtaV.empty()) g_gtaVValid = game_paths::ValidateGtaVDirectory(g_gtaV, g_gtaVVersion);
-    if (g_ageCount) {
-        std::vector<double> ages(g_ageSamples.begin(), g_ageSamples.begin() + g_ageCount);
-        const size_t index = (95 * g_ageCount + 99) / 100 - 1;
-        std::nth_element(ages.begin(), ages.begin() + index, ages.end());
-        g_ageP95Ms = ages[index];
-    }
     const int64_t now = Qpc();
     if (g_lastRefreshQpc) {
         const double seconds = static_cast<double>(now - g_lastRefreshQpc) / g_qpcFrequency.QuadPart;
@@ -458,8 +284,6 @@ void Refresh() {
         }
     }
     g_lastRefreshQpc = now;
-    g_lastProduced = g_frames->produced;
-    g_lastReceived = g_received;
     g_lastCaptureFrames = g_capture.Frames();
     g_lastVCaptureFrames = g_vCapture.Frames();
     const bool running = IsGameRunning();
@@ -497,7 +321,7 @@ void Refresh() {
            << L" / 覆盖旧帧 " << g_capture.OverwrittenFrames()
            << L" / 跳过 " << g_capture.PublishDrops() << L"\r\n"
            << g_vCapture.SaConsumerStatus() << L"；SA 前台按 F9 放置世界矩形\r\n"
-           << L"D3D9Ex 诊断：" << (g_exDiagnostic ? L"已选择，重启 SA 后生效" : L"关闭");
+           << L"实验性 D3D9Ex 设备替换：" << (g_exDiagnostic ? L"已启用；重启 SA 后生效" : L"关闭（推荐）");
     UpdateText(g_saStatus, g_saStatusText, saStatus.str(), false);
 
     std::wostringstream vStatus;
@@ -523,9 +347,6 @@ void Refresh() {
            << L"V 窗口生产者：" << (g_vCaptureEnabled ? g_vCapture.Status() : L"已关闭")
            << L"    " << g_vCapture.Width() << L" × " << g_vCapture.Height()
            << L"    " << std::fixed << std::setprecision(1) << g_vCaptureFps << L" FPS\r\n"
-           << L"V 共享帧：发布 " << g_vCapture.PublishedFrames()
-           << L" / 覆盖旧帧 " << g_vCapture.OverwrittenFrames()
-           << L" / 跳过 " << g_vCapture.PublishDrops() << L"\r\n"
            << L"仅停用 PortalV.asi 不会移除 Script Hook V 或 ReShade，不能用于切换 Online。";
     UpdateText(g_vStatus, g_vStatusText, vStatus.str(), false);
 
@@ -824,12 +645,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                     g_instance, nullptr);
         SendMessageW(g_gpuMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         SendMessageW(g_gpuMode, BM_SETCHECK, g_captureEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
-        g_exMode = CreateWindowExW(0, L"BUTTON", L"D3D9Ex 诊断（仅 dev；切换后重启 SA）",
+        g_exMode = CreateWindowExW(0, L"BUTTON", L"实验性 D3D9Ex 设备替换（不推荐）",
                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                     0, 0, 1, 1, window,
                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kExDiagnostic)),
                                     g_instance, nullptr);
         SendMessageW(g_exMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        SendMessageW(g_exMode, BM_SETCHECK, g_exDiagnostic ? BST_CHECKED : BST_UNCHECKED, 0);
         g_vGpuMode = CreateWindowExW(0, L"BUTTON", L"V GPU 窗口生产者（可切换）",
                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                      0, 0, 1, 1, window,
@@ -894,6 +716,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         if (wParam == kFrameTimer) {
             CaptureGameFrame();
             CaptureVFrame();
+            portal_dev::legacy::sa_gpu_preview::Pump(g_frames, g_preview);
         }
         return 0;
     case WM_COMMAND:
@@ -922,7 +745,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             break;
         case kExDiagnostic:
             g_exDiagnostic = SendMessageW(g_exMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            if (g_frames) InterlockedExchange(&g_frames->bridgeEnabled, g_exDiagnostic ? 1 : 0);
+            if (g_frames) InterlockedExchange(&g_frames->bridgeEnabled, g_exDiagnostic ? 3 : 0);
             Refresh();
             break;
         case kVCaptureMode:
@@ -939,14 +762,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_capture.Stop();
         g_vCapture.Stop();
         g_vClient.Disconnect();
-        ReleaseSharedTextures();
-        if (g_readQuery) g_readQuery->Release();
-        if (g_device) g_device->Release();
-        if (g_d3d) g_d3d->Release();
-        if (g_frames && g_readingSlot >= 0) {
-            InterlockedCompareExchange(&g_frames->slots[g_readingSlot].state,
-                                       portal::kFree, portal::kReading);
-        }
+        portal_dev::legacy::sa_gpu_preview::Stop(g_frames);
         if (g_frames) UnmapViewOfFile(g_frames);
         if (g_mapping) CloseHandle(g_mapping);
         if (g_supervisorMutex) {
@@ -962,7 +778,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 
 } // namespace
 
-int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t*, int showCommand) {
+int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* commandLine, int showCommand) {
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     g_instance = instance;
     SetProcessDPIAware();
@@ -1014,6 +830,13 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t*, int showCommand) 
     }
     ShowWindow(g_window, showCommand);
     UpdateWindow(g_window);
+    if (commandLine && wcsstr(commandLine, L"--auto-run-sa")) {
+        const HINSTANCE launched = ShellExecuteW(g_window, L"open", g_game.c_str(), nullptr,
+                                                  g_game.parent_path().c_str(), SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(launched) <= 32) {
+            ShowError(L"自动启动 SA 失败", WinError());
+        }
+    }
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {

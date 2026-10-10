@@ -24,7 +24,7 @@ GTA V 游戏窗口 ──WGC──> PortalDev 的 V 预览
 PortalV.asi ──最新状态快照──> PortalDev
 ```
 
-V 窗口捕获发生在 PortalDev 进程，独立于 `PortalV.asi`。纹理留在 GPU；生产路径没有把整帧像素读回 CPU。它目前捕获的是玩家实际看到的窗口，不是 GTA V 的离屏第二视角。共享纹理协议在 `src/PortalVFrames.h`，测试在 `src/tests/VFramePublisherSmoke.cpp`。
+V 窗口捕获发生在 PortalDev 进程，独立于 `PortalV.asi`。纹理留在 GPU；生产路径没有把整帧像素读回 CPU。它目前捕获的是玩家实际看到的窗口，不是 GTA V 的离屏第二视角。此处记录的是 2026-10-09 的旧阶段；后续已删除无人消费的通用 `VFrames` 输出，当前 V 捕获直接写入 SA 拥有的三槽纹理。
 
 这里的“SA 生产者”指 SA 渲染出的窗口已经被 Windows Graphics Capture 捕获，PortalDev 能实时预览；不是说 SA 画面已经发布到 GTA V 可以打开的跨进程纹理。SA 捕获目前只开启预览，V 捕获才开启三槽共享发布。两条路径及参考源码入口见 [跨游戏实例与画面链路](CROSS_GAME_REFERENCES.md)。
 

@@ -8,15 +8,14 @@
 #include <cstdint>
 #include <string>
 
-#include "../../PortalVFrames.h"
+#include "../../SAToVFrames.h"
 
-class VFramePublisher {
+class SAFramePublisher {
 public:
-    enum class Source { Sa, V };
-    explicit VFramePublisher(Source source = Source::V) : source_(source) {}
-    ~VFramePublisher();
-    VFramePublisher(const VFramePublisher&) = delete;
-    VFramePublisher& operator=(const VFramePublisher&) = delete;
+    SAFramePublisher() = default;
+    ~SAFramePublisher();
+    SAFramePublisher(const SAFramePublisher&) = delete;
+    SAFramePublisher& operator=(const SAFramePublisher&) = delete;
 
     bool Start(ID3D11Device* device);
     bool Publish(ID3D11DeviceContext* context, ID3D11Texture2D* source,
@@ -28,7 +27,6 @@ public:
     uint64_t Dropped() const { return dropped_; }
 
 private:
-    Source source_;
     struct TextureSlot {
         winrt::com_ptr<ID3D11Texture2D> texture;
         winrt::com_ptr<IDXGIKeyedMutex> mutex;
@@ -41,8 +39,8 @@ private:
 
     winrt::com_ptr<ID3D11Device> device_;
     HANDLE mapping_ = nullptr;
-    portal_v_frames::SharedFrames* shared_ = nullptr;
-    std::array<TextureSlot, portal_v_frames::kSlotCount> slots_{};
+    sa_to_v_frames::SharedFrames* shared_ = nullptr;
+    std::array<TextureSlot, sa_to_v_frames::kSlotCount> slots_{};
     UINT width_ = 0;
     UINT height_ = 0;
     LONG generation_ = 0;
@@ -50,5 +48,5 @@ private:
     uint64_t produced_ = 0;
     uint64_t overwritten_ = 0;
     uint64_t dropped_ = 0;
-    std::wstring status_ = L"等待 GTA V 窗口";
+    std::wstring status_ = L"等待 SA 窗口";
 };

@@ -59,7 +59,7 @@ void LoadPlane() {
     FILE* file = nullptr;
     if (_wfopen_s(&file, g_planePath, L"r") || !file) return;
     Plane value{};
-    const int read = std::fscanf(file, "%f %f %f %f %f %f %f %f %f",
+    const int read = ::fscanf_s(file, "%f %f %f %f %f %f %f %f %f",
         &value.center.x, &value.center.y, &value.center.z,
         &value.right.x, &value.right.y, &value.right.z,
         &value.up.x, &value.up.y, &value.up.z);

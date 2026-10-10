@@ -116,7 +116,8 @@
     </ProjectReference>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="source\D3D9ExBridge.cpp" />
+    <ClCompile Include="source\legacy\diagnostics\D3D9ExBridge.cpp" />
+    <ClCompile Include="source\legacy\diagnostics\SaGpuProducer.cpp" />
     <ClCompile Include="source\Main.cpp" />
     <ClCompile Include="source\StateCapture.cpp" />
     <ClCompile Include="source\VConsumer.cpp" />

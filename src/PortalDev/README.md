@@ -6,10 +6,10 @@ The GPU checkbox controls capture in PortalDev and can be switched while the gam
 
 ## Build and run
 
-Close PortalDev before rebuilding. Double-click `src/Build-Dev.cmd` in File Explorer and wait for `BUILD SUCCEEDED`. From PowerShell at the repository root, the equivalent is:
+Close PortalDev before rebuilding. Double-click `src/Build-Dev.cmd` in File Explorer and wait for `BUILD AND TESTS SUCCEEDED`. From PowerShell at the repository root, the equivalent is:
 
 ```powershell
-& '.\src\Build-Dev.ps1'
+& '.\src\Build-Dev.ps1' -RunTests
 ```
 
 Open `src/PortalDev/bin/x64/Release/PortalDev.exe`. Click **Deploy and open directory**, then start `gta-sa.EXE` in that dev game directory. PortalDev detects the game window automatically. The status should show **GPU 窗口捕获正常**, a growing frame count, capture FPS, and image dimensions; the preview should show moving game content. The log should include `PortalSA loaded` and `Render output hook installed`. State records appear after entering gameplay.
@@ -20,19 +20,20 @@ The **Choose SA directory** button opens a modal folder picker. The default rema
 
 For the GTA V compatibility probe, use a dedicated Enhanced Story Mode development installation with Script Hook V and its ASI loader. With the game closed, click **部署 V + FX**, then start Enhanced in Story Mode. A moving pink and blue test HUD appeared on a previous workstation on 2026-10-09; it is now off by default. PortalDev should show V connected and changing camera data while the game runs. **切换测试 HUD** enables the diagnostic shape temporarily, **打开 V 日志** opens `PortalV.log`, and **仅停用 V 插件** renames only our ASI after the game closes. This does not remove Script Hook V, its loader, ReShade, or shaders and cannot prepare the installation for Online. The tool checks the selected game executable, `ScriptHookV.dll`, and `dinput8.dll` before deployment. It displays file-version differences but does not block deployment based on them. The previously tested game file version was `1.0.1158.16` and the runtime DLL version ended in `1158.13`; the local Script Hook V log nevertheless reported successful initialization and launch of PortalV's main thread. That observation does not establish future-patch compatibility. The HUD is a native shape diagnostic and does not receive SA image textures.
 
-The D3D9Ex shared-texture bridge tried earlier caused a game startup crash. It is off by default; the **D3D9Ex diagnostic** checkbox opts into it on the next SA launch only. The working SA window preview does not use it. GTA V has an external shared-texture producer, and its candidate SA-frame consumer is described in `src/PortalV/README.md`. Both game-side displays and depth occlusion still need runtime verification.
+The D3D9Ex shared-texture bridge tried earlier caused a game startup crash. Stage 1 (hook installation) and stage 2 (a proxy forwarding to the ordinary device) both reached gameplay successfully. The current **D3D9Ex stage 3** checkbox keeps capability queries on the legacy factory but changes `CreateDevice` to `CreateDeviceEx` on the next SA launch. The archived SA producer and shared-texture allocation remain disabled, isolating Ex-device compatibility. The working SA window preview does not use it.
 
 ## GTA V window producer
 
-The **V GPU window producer** checkbox is independent of the `PortalV.asi` script. When the selected GTA V Enhanced process has a visible window, PortalDev captures that window with Windows Graphics Capture, previews it below the SA preview, and copies each latest frame into one of three named D3D11 textures. The frame control mapping is `Local\GTAPortal.VFrames.v1` and its layout is in `src/PortalVFrames.h`. Each texture uses a D3D11 NT shared handle and keyed mutex; a future D3D11 consumer can open the name in the slot and acquire key `1` after claiming `Ready`, then release key `0` and mark the slot `Free`. The producer reclaims the oldest `Ready` slot if all three are occupied, so the producer does not build an unbounded frame queue. It never overwrites a slot marked `Reading`.
+The **V GPU window producer** checkbox is independent of the `PortalV.asi` script. When the selected GTA V Enhanced process has a visible window, PortalDev captures that window with Windows Graphics Capture and previews that captured texture directly in the Dev window. The preview copies that captured texture straight to the Dev window; it does not consume a separate shared-frame channel. The old unused `Local\GTAPortal.VFrames.v1` diagnostic output has been removed. For the actual V→SA path, PortalDev converts the captured V frame entirely on the GPU into one of three textures owned by SA.
 
-The tool reports published, overwritten, and skipped frames. These count the producer's three-slot queue only; they do not measure frames lost inside the game or Windows compositor. The metadata includes the compositor timestamp, dimensions, format, adapter LUID, producer PID, and generation. On resize, the producer recreates its textures and advances the generation. GTA SA's candidate consumer uses a separate `Local\GTAPortal.VToSA.v1` mapping and D3D9 shared textures owned by the ASI; PortalDev converts the captured V frame entirely on the GPU. Keep both games and PortalDev on the same GPU adapter. This is still the visible GTA V window, not an offscreen portal camera.
+GTA SA's candidate consumer uses `Local\GTAPortal.VToSA.v1` and three GPU textures owned by the ASI. The slot states prevent PortalDev from overwriting a texture while SA is reading it. Keep both games and PortalDev on the same GPU adapter. This is still the visible GTA V window, not an offscreen portal camera.
 
 For acceptance, build with `& '.\src\Build-Dev.ps1'`, deploy SA to `game/dev/GTA San Andreas`, enable the V GPU window producer, and start both games. In SA gameplay, press F9 and check that the GTA V picture remains fixed as the camera moves, is hidden by SA walls/characters/vehicles in front, and disappears about 500 ms after V capture stops. Check PortalDev's SA consumer status and `portal.log` if the picture is missing. If native sharing fails, enable D3D9Ex diagnostic and restart SA; first verify SA reaches gameplay. No code path or checkbox here prepares a modded GTA V installation for Online.
 
-To check the GPU sharing path without launching GTA V, build and run the synthetic texture smoke test:
+To build all three Release targets and run the two synthetic GPU smoke tests without launching either game:
 
 ```powershell
-& 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe' '.\src\tests\VFramePublisherSmoke.vcxproj' '/p:Configuration=Release' '/p:Platform=x64'
-& '.\src\tests\bin\x64\Release\VFramePublisherSmoke.exe'
+& '.\src\Build-Dev.ps1' -RunTests
 ```
+
+`SAFramePublisherSmoke` checks the SA→V named three-slot channel. `D3D11D3D12BridgeSmoke` checks the GPU copy and fence used by its GTA V consumer. Neither test replaces the still-required in-game V→SA rectangle and depth acceptance.

@@ -1,6 +1,6 @@
 # GTAPortal
 
-GTAPortal explores a real-time portal between GTA San Andreas and GTA V Enhanced. PortalDev captures both game windows through Windows Graphics Capture and publishes their frames as separate three-slot D3D11 shared-texture channels, without a full-frame CPU readback. PortalV is an x64 Script Hook V ASI and ReShade add-on with a candidate SA→V consumer: F9 anchors a world-fixed picture plane, and the effect uses GTA V scene depth for visual occlusion. On 2026-10-09, GTA V loaded the add-on, compiled `PortalSA.fx`, saved the user-confirmed Grove Street anchor and received SA frames; the ReShade technique had not been enabled, so picture display and occlusion still need in-game acceptance. A candidate V→SA consumer now draws PortalDev's GTA V capture on a depth-tested SA world rectangle through D3D9/D3D11 GPU sharing. This reverse path has not been built or accepted in-game yet.
+GTAPortal explores a real-time portal between GTA San Andreas and GTA V Enhanced. PortalDev captures both game windows through Windows Graphics Capture and publishes their frames through separate three-slot GPU texture channels, without a full-frame CPU readback. PortalV is an x64 Script Hook V ASI and ReShade add-on: F9 anchors a world-fixed picture plane, and the effect uses GTA V scene depth for visual occlusion. On 2026-10-10, the user enabled the `PortalSA` technique and confirmed live SA picture display inside GTA V; the observed source still contained the Windows frame, and the subsequent physical-pixel client-area crop fix still needs in-game acceptance. A candidate V→SA consumer draws PortalDev's GTA V capture on a depth-tested SA world rectangle through D3D9/D3D11 GPU sharing. The reverse path builds but has not been accepted in-game yet.
 
 ## Clone on another device
 
@@ -45,21 +45,29 @@ After cloning on a new workstation, build GTAPortal and install the optional win
 & '.\src\Install-DevWindowedMode.ps1'
 ```
 
+To build and run the two hardware smoke tests as well:
+
+```powershell
+& '.\src\Build-Dev.ps1' -RunTests
+```
+
 The second command builds the pinned upstream source as x86 and copies only its ASI plus the tracked debug configuration into `game/dev/GTA San Andreas/scripts`. It never writes to `game/clean`.
 
 ## Repository layout
 
 - `src/PortalSA/`: x86 ASI, camera probe, and candidate V→SA world rectangle. The earlier D3D9Ex bridge is available only through an opt-in development diagnostic switch.
 - `src/PortalV/`: x64 Enhanced ASI with the camera probe and candidate SA→V ReShade picture plane.
-- `src/PortalDev/`: x64 development tool with WGC preview and independent SA/V shared GPU frame channels.
-- `src/PortalVFrames.h`: latest-frame, three-slot GPU texture publishing protocol for both games.
+- `src/PortalDev/`: x64 development tool with WGC previews and both cross-game GPU bridges.
+- `src/SAToVFrames.h`: latest-frame, three-slot SA-to-V GPU texture publishing protocol.
 - `src/Build-Dev.ps1`: reproducible build entry that selects a complete local MSVC toolchain.
 - `src/Install-DevWindowedMode.ps1`: one-time per-workstation build/install helper for the optional windowed-mode dependency.
 - `src/config/III.VC.SA.WindowedMode.ini`: reproducible dual-monitor debug defaults (1600x900 window, no pause on focus loss).
 - `src/docs/commands.txt`: original project requirements.
 - `src/docs/PROJECT_RESOURCES.md`: resource inventory and architectural analysis.
 - `src/docs/MILESTONE_2026-10-09.md`: verified current state, observations, and next measurements.
+- `src/docs/MILESTONE_2026-10-10.md`: current dual-direction GPU bridge milestone, accepted behavior, failed D3D9Ex experiment, and remaining in-game checks.
 - `src/docs/MILESTONE_SA_TO_V_2026-10-09.md`: SA→V candidate implementation, tests, and game acceptance steps.
+- `src/docs/CODE_AUDIT_2026-10-10.md`: current source inventory, GPU data flows, evidence boundaries, and cleanup priorities.
 - `src/docs/CROSS_GAME_REFERENCES.md`: read-only mashup source index and a plain-language explanation of the current SA frame path.
 - `.gitmodules`: dependency URLs and paths.
 - `.gitignore`: tracks project files and submodule pointers while excluding game files, local tools, and build output.

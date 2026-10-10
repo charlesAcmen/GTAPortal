@@ -2,7 +2,8 @@
 param(
     [switch]$SkipSdk,
     [switch]$RebuildSdk,
-    [switch]$SkipTool
+    [switch]$SkipTool,
+    [switch]$RunTests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,6 +12,8 @@ $sdk = Join-Path $repo 'third_party\plugin-sdk\plugin-sdk'
 $portalProject = Join-Path $repo 'src\PortalSA\PortalSA.vcxproj'
 $toolProject = Join-Path $repo 'src\PortalDev\PortalDev.vcxproj'
 $portalVProject = Join-Path $repo 'src\PortalV\PortalV.vcxproj'
+$publisherTestProject = Join-Path $repo 'src\tests\SAFramePublisherSmoke.vcxproj'
+$bridgeTestProject = Join-Path $repo 'src\tests\D3D11D3D12BridgeSmoke.vcxproj'
 $sdkProject = Join-Path $sdk 'plugin_sa\Plugin_SA.vcxproj'
 $sdkLibrary = Join-Path $sdk 'output\lib\Plugin.lib'
 
@@ -84,6 +87,30 @@ if (-not $SkipTool) {
         '/p:Configuration=Release' '/p:Platform=x64' `
         "/p:PlatformToolset=$($toolchain.Toolset)" '/m' '/v:minimal'
     if ($LASTEXITCODE -ne 0) { throw "PortalDev build failed with exit code $LASTEXITCODE" }
+}
+
+if ($RunTests) {
+    $tests = @(
+        @{
+            Name = 'SAFramePublisherSmoke'
+            Project = $publisherTestProject
+            Executable = Join-Path $repo 'src\tests\bin\x64\SAFramePublisherSmoke\SAFramePublisherSmoke.exe'
+        },
+        @{
+            Name = 'D3D11D3D12BridgeSmoke'
+            Project = $bridgeTestProject
+            Executable = Join-Path $repo 'src\tests\bin\x64\Release\D3D11D3D12BridgeSmoke.exe'
+        }
+    )
+    foreach ($test in $tests) {
+        & $toolchain.MSBuild $test.Project `
+            '/p:Configuration=Release' '/p:Platform=x64' `
+            "/p:PlatformToolset=$($toolchain.Toolset)" '/m' '/v:minimal'
+        if ($LASTEXITCODE -ne 0) { throw "$($test.Name) build failed with exit code $LASTEXITCODE" }
+
+        & $test.Executable
+        if ($LASTEXITCODE -ne 0) { throw "$($test.Name) failed with exit code $LASTEXITCODE" }
+    }
 }
 
 Write-Host ''

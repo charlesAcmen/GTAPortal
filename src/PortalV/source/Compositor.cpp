@@ -1,7 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include "Compositor.h"
-#include "../../PortalVFrames.h"
+#include "../../SAToVFrames.h"
 
 #include <windows.h>
 #include <d3d11_4.h>
@@ -18,7 +18,7 @@
 
 using Microsoft::WRL::ComPtr;
 namespace api = reshade::api;
-namespace frames = portal_v_frames;
+namespace frames = sa_to_v_frames;
 
 namespace portal_v::compositor {
 namespace {
@@ -143,11 +143,11 @@ bool EnsureReader(api::effect_runtime* runtime) {
 
 bool OpenFrames() {
     if (g_frames) return true;
-    g_mapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, frames::kSaMappingName);
+    g_mapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, frames::kMappingName);
     if (!g_mapping) return false;
     g_frames = static_cast<frames::SharedFrames*>(MapViewOfFile(
         g_mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(frames::SharedFrames)));
-    if (!g_frames || g_frames->magic != frames::kSaMagic ||
+    if (!g_frames || g_frames->magic != frames::kMagic ||
         g_frames->version != frames::kVersion || g_frames->size != sizeof(*g_frames)) {
         CloseSource();
         return false;
