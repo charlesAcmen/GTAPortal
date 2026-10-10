@@ -22,7 +22,19 @@ SA 游戏窗口
 - SA 与 V 的共享发布测试通过：两条通道分别 `produced=12 overwritten=7`，并验证捕获重启后资源代际变化。
 - 独立 D3D11→D3D12 桥测试通过，得到预期颜色 `FF2468AC`。测试末端的 16×16 CPU 读回仅用于断言；实际传输路径无全帧 CPU 读回。
 - 固定版本 ReShade FX 编译器使用参考项目的 `ReShade.fxh`，成功为像素和顶点入口生成 DXBC。
-- 尚未实测 ReShade **游戏内**效果加载、GTA V 深度缓冲选择、Grove Street 遮挡、两游戏并行帧时间。本机 GTA V 目录在检查时没有 ReShade 运行库和 `ReShade.fxh`。因此此阶段是可部署候选实现，不能称为游戏内完成。
+- 代码首次编译时，本机 GTA V 目录还没有 ReShade 运行库。随后用户安装了 ReShade 6.8.0 并在故事模式运行，实机结果见下文；世界平面画面、深度遮挡及两游戏并行帧时间仍未完成视觉验收。
+
+## 2026-10-09 晚间实机记录
+
+用户确认以下最后一次 F9 写入的平面中心就在葛洛夫街，用作之后继续测试的**用户确认测试锚点**，不是游戏地图的通用地名坐标：
+
+```text
+PortalVPlane.txt: X=96.491821 Y=-1932.880859 Z=21.770508 yaw=-133.509491°
+```
+
+`PortalV.log` 多次记录 `PortalV SA plane anchored 3m in front of camera (F9)`，所以 F9 已收到并保存位置。`ReShade.log` 记录 `PortalSA.fx` 在游戏内编译成功（有一条 X4000 警告）、PortalV add-on 注册、D3D11/D3D12 桥初始化，以及截至退出前 `received=8100 skipped=764 frame=21135`。这证明生产帧已到达 GTA V 的 ReShade add-on；`skipped` 是实时最新帧策略下跳过的旧帧计数，不能单凭它推断画面卡顿。
+
+当时 `ReShadePreset.ini` 仍为 0 字节；F9 只固定世界平面，不会启用 ReShade 技术。用户没有看到小窗，最直接的待检项是在 ReShade 界面启用 `PortalSA`。目前不能把“帧已接收”写成“画面及遮挡已验收”。
 
 ## 实机验收顺序
 
