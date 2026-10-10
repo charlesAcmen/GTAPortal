@@ -50,6 +50,7 @@
     <ClCompile Include="source\GamePaths.cpp" />
     <ClCompile Include="source\GameProcess.cpp" />
     <ClCompile Include="source\PortalVClient.cpp" />
+    <ClCompile Include="source\PortalCameraClient.cpp" />
     <ClCompile Include="source\SAFramePublisher.cpp" />
     <ClCompile Include="source\VToSAPublisher.cpp" />
     <ClCompile Include="source\legacy\diagnostics\SaGpuPreview.cpp" />

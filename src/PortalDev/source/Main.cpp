@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -14,10 +15,12 @@
 #include <vector>
 
 #include "../../PortalProtocol.h"
+#include "../../PortalVProtocol.h"
 #include "GpuCapture.h"
 #include "GamePaths.h"
 #include "GameProcess.h"
 #include "PortalVClient.h"
+#include "PortalCameraClient.h"
 #include "legacy/diagnostics/SaGpuPreview.h"
 
 namespace fs = std::filesystem;
@@ -45,6 +48,14 @@ enum ControlId : int {
     kOpenVLog = 1016,
     kVCaptureMode = 1017,
     kExDiagnostic = 1018,
+    kTeleportV = 1019,
+    kPortalCamera = 1020,
+    kCaptureSaAnchor = 1021,
+    kSaveCalibration = 1022,
+    kSaPortalX = 1030,
+    kSaPortalY = 1031,
+    kSaPortalZ = 1032,
+    kSaPortalYaw = 1033,
 };
 
 HINSTANCE g_instance{};
@@ -63,6 +74,9 @@ HWND g_logHeading{};
 HWND g_gpuMode{};
 HWND g_vGpuMode{};
 HWND g_exMode{};
+HWND g_portalCameraMode{};
+HWND g_saPortalEdits[4]{};
+HWND g_calibrationLabel{};
 HFONT g_uiFont{};
 HFONT g_monoFont{};
 HFONT g_headingFont{};
@@ -82,6 +96,11 @@ fs::path g_sourceVAsi;
 PortalVClient g_vClient;
 PortalVClient::Snapshot g_vSnapshot;
 bool g_vConnected{};
+PortalCameraClient g_portalCameraClient;
+PortalCameraClient::Snapshot g_saCameraSnapshot;
+bool g_saCameraConnected{};
+bool g_portalCameraEnabled{};
+float g_saPortal[4]{2495.3301f, -1690.2500f, 15.7656f, 0.0f};
 HANDLE g_mapping{};
 HANDLE g_supervisorMutex{};
 portal::SharedFrames* g_frames{};
@@ -273,6 +292,118 @@ void UpdateText(HWND control, std::wstring& previous, const std::wstring& next, 
     previous = next;
 }
 
+void LoadCalibration() {
+    std::ifstream file(g_dev / L"PortalCalibration.txt");
+    float value[4]{};
+    if (file >> value[0] >> value[1] >> value[2] >> value[3]) {
+        std::copy(std::begin(value), std::end(value), std::begin(g_saPortal));
+    }
+}
+
+void UpdateCalibrationEdits() {
+    for (int index = 0; index < 4; ++index) {
+        if (!g_saPortalEdits[index]) continue;
+        wchar_t text[32]{};
+        swprintf_s(text, L"%.6f", g_saPortal[index]);
+        SetWindowTextW(g_saPortalEdits[index], text);
+    }
+}
+
+bool ReadCalibrationEdits() {
+    float values[4]{};
+    for (int index = 0; index < 4; ++index) {
+        wchar_t text[64]{};
+        GetWindowTextW(g_saPortalEdits[index], text, static_cast<int>(std::size(text)));
+        wchar_t* end = nullptr;
+        values[index] = std::wcstof(text, &end);
+        if (end == text || *end != L'\0' || !std::isfinite(values[index])) return false;
+    }
+    std::copy(std::begin(values), std::end(values), std::begin(g_saPortal));
+    return true;
+}
+
+bool SaveCalibration() {
+    if (!ReadCalibrationEdits()) return false;
+    std::ofstream file(g_dev / L"PortalCalibration.txt", std::ios::trunc);
+    if (!file) return false;
+    file << std::fixed << std::setprecision(6)
+         << g_saPortal[0] << ' ' << g_saPortal[1] << ' '
+         << g_saPortal[2] << ' ' << g_saPortal[3] << '\n';
+    return file.good();
+}
+
+struct Vec3f { float x, y, z; };
+Vec3f Add(Vec3f a, Vec3f b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+Vec3f Scale(Vec3f a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+float Dot(Vec3f a, Vec3f b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+Vec3f Unit(Vec3f value) {
+    const float length = std::sqrt(Dot(value, value));
+    return length > 0.0001f ? Scale(value, 1.0f / length) : Vec3f{};
+}
+
+void PortalBasis(float yawDegrees, Vec3f& right, Vec3f& forward, Vec3f& up) {
+    const float yaw = yawDegrees * 0.01745329251994329577f;
+    right = {std::cos(yaw), std::sin(yaw), 0.0f};
+    forward = {-std::sin(yaw), std::cos(yaw), 0.0f};
+    up = {0.0f, 0.0f, 1.0f};
+}
+
+Vec3f MapBasisVector(Vec3f value, Vec3f sourceRight, Vec3f sourceForward, Vec3f sourceUp,
+                     Vec3f targetRight, Vec3f targetForward, Vec3f targetUp) {
+    return Add(Add(Scale(targetRight, Dot(value, sourceRight)),
+                   Scale(targetForward, Dot(value, sourceForward))),
+               Scale(targetUp, Dot(value, sourceUp)));
+}
+
+void UpdatePortalCamera() {
+    g_saCameraConnected = g_portalCameraClient.Read(g_saCameraSnapshot);
+    PortalVClient::Snapshot liveV{};
+    const bool vReady = g_vClient.Read(liveV) && liveV.cameraValid;
+    if (vReady) {
+        g_vSnapshot = liveV;
+        g_vConnected = true;
+    }
+    if (!g_portalCameraEnabled || !vReady) {
+        if (g_saCameraConnected) {
+            const float zero[3]{};
+            g_portalCameraClient.Publish(false, zero, zero, zero, 70.0f);
+        }
+        return;
+    }
+
+    constexpr Vec3f vCenter{96.491821f, -1932.880859f, 21.770508f};
+    constexpr float vYaw = -133.509491f;
+    Vec3f vRight{}, vForward{}, vUp{};
+    Vec3f saRight{}, saForward{}, saUp{};
+    PortalBasis(vYaw, vRight, vForward, vUp);
+    PortalBasis(g_saPortal[3], saRight, saForward, saUp);
+
+    const Vec3f vCamera{liveV.renderedCameraPosition[0], liveV.renderedCameraPosition[1],
+                        liveV.renderedCameraPosition[2]};
+    const Vec3f offset{vCamera.x - vCenter.x, vCamera.y - vCenter.y, vCamera.z - vCenter.z};
+    const Vec3f saCenter{g_saPortal[0], g_saPortal[1], g_saPortal[2]};
+    const Vec3f mappedOffset = MapBasisVector(offset, vRight, vForward, vUp,
+                                               saRight, saForward, saUp);
+    const Vec3f targetPosition = Add(saCenter, mappedOffset);
+
+    const float yaw = liveV.renderedCameraRotation[2] * 0.01745329251994329577f;
+    const float pitch = liveV.renderedCameraRotation[0] * 0.01745329251994329577f;
+    const Vec3f cameraForward{-std::sin(yaw) * std::cos(pitch),
+                              std::cos(yaw) * std::cos(pitch), std::sin(pitch)};
+    const Vec3f cameraRight{std::cos(yaw), std::sin(yaw), 0.0f};
+    const Vec3f cameraUp{cameraRight.y * cameraForward.z,
+                         -cameraRight.x * cameraForward.z,
+                          cameraRight.x * cameraForward.y - cameraRight.y * cameraForward.x};
+    const Vec3f targetForward = Unit(MapBasisVector(cameraForward, vRight, vForward, vUp,
+                                                     saRight, saForward, saUp));
+    const Vec3f targetUp = Unit(MapBasisVector(cameraUp, vRight, vForward, vUp,
+                                                saRight, saForward, saUp));
+    const float position[3]{targetPosition.x, targetPosition.y, targetPosition.z};
+    const float forward[3]{targetForward.x, targetForward.y, targetForward.z};
+    const float up[3]{targetUp.x, targetUp.y, targetUp.z};
+    g_portalCameraClient.Publish(true, position, forward, up, liveV.renderedFovDegrees);
+}
+
 void Refresh() {
     if (!g_gtaV.empty()) g_gtaVValid = game_paths::ValidateGtaVDirectory(g_gtaV, g_gtaVVersion);
     const int64_t now = Qpc();
@@ -320,6 +451,9 @@ void Refresh() {
            << L"SA 共享帧：发布 " << g_capture.PublishedFrames()
            << L" / 覆盖旧帧 " << g_capture.OverwrittenFrames()
            << L" / 跳过 " << g_capture.PublishDrops() << L"\r\n"
+           << L"Portal 相机控制：" << (g_saCameraConnected ? L"已连接" : L"等待 SA")
+           << L" / " << (g_saCameraSnapshot.overrideActive ? L"正在接管" : L"未接管")
+           << L"；SA 前台 F8 写入精确位置标记\r\n"
            << g_vCapture.SaConsumerStatus() << L"；SA 前台按 F9 放置世界矩形\r\n"
            << L"实验性 D3D9Ex 设备替换：" << (g_exDiagnostic ? L"已启用；重启 SA 后生效" : L"关闭（推荐）");
     UpdateText(g_saStatus, g_saStatusText, saStatus.str(), false);
@@ -339,8 +473,23 @@ void Refresh() {
                << g_vSnapshot.cameraPosition[1] << L", " << g_vSnapshot.cameraPosition[2]
                << L") FOV " << g_vSnapshot.fovDegrees << L"  帧 " << g_vSnapshot.frameId
                << L"  状态年龄 " << g_vSnapshot.ageMs << L" ms\r\n";
+        vStatus << L"最终渲染相机：("
+                << g_vSnapshot.renderedCameraPosition[0] << L", "
+                << g_vSnapshot.renderedCameraPosition[1] << L", "
+                << g_vSnapshot.renderedCameraPosition[2] << L") FOV "
+                << g_vSnapshot.renderedFovDegrees << L"\r\n";
+    }
+    const wchar_t* teleportStatus = L"未请求";
+    switch (g_vSnapshot.teleportResult) {
+    case portal_v::kTeleportPending: teleportStatus = L"正在加载碰撞"; break;
+    case portal_v::kTeleportSuccess: teleportStatus = L"成功并找到地面"; break;
+    case portal_v::kTeleportRejectedOnline: teleportStatus = L"拒绝：检测到 Online"; break;
+    case portal_v::kTeleportPlayerUnavailable: teleportStatus = L"等待 Story Mode 玩家"; break;
+    case portal_v::kTeleportGroundUnavailable: teleportStatus = L"已到配置高度，但未确认地面"; break;
+    default: break;
     }
     vStatus << L"测试 HUD：" << (g_vConnected && g_vSnapshot.overlayEnabled ? L"开启" : L"关闭/未连接") << L"\r\n"
+           << L"开发 TP：" << teleportStatus << L"\r\n"
            << L"SA 矩形：" << (fs::exists(g_gtaV / L"reshade-shaders" / L"Shaders" / L"PortalSA.fx") ? L"着色器已部署" : L"着色器未部署")
            << L"；ReShade：" << (fs::exists(g_gtaV / L"ReShade64.asi") || fs::exists(g_gtaV / L"dxgi.dll") ? L"检测到运行库" : L"未检测到运行库")
            << L"；按 F9 重设位置\r\n"
@@ -457,6 +606,8 @@ void SelectSaDirectory() {
     }
     g_capture.Stop();
     SetSaDirectory(*selected);
+    LoadCalibration();
+    UpdateCalibrationEdits();
     if (!game_paths::SaveDirectory(L"SaDirectory", g_dev)) {
         ShowError(L"保存路径失败", L"本次已切换 SA 目录，但无法保存到当前用户的设置。请检查注册表写入权限。");
     }
@@ -545,6 +696,9 @@ void Layout(HWND window) {
     const int vSafetyY = y; y += 36 + gap;
     const int vActionsY = y; y += buttonHeight + gap;
     const int vToolsY = y; y += buttonHeight + gap;
+    const int calibrationLabelY = y; y += headingHeight + 4;
+    const int calibrationEditY = y; y += buttonHeight + gap;
+    const int calibrationActionY = y; y += buttonHeight + gap;
     const int vStatusY = y; y += statusHeight + gap;
     const int vPreviewHeadingY = y; y += headingHeight + 4;
     const int vPreviewY = y; y += previewHeight + gap * 2;
@@ -588,7 +742,18 @@ void Layout(HWND window) {
     button(kDisableV, padding + 190 + gap + 116 + gap, vActionsY, 150);
     button(kOverlayV, padding, vToolsY, 150);
     button(kOpenVLog, padding + 150 + gap, vToolsY, 110);
-    place(g_vGpuMode, padding + 150 + gap + 110 + gap, vToolsY, 300, buttonHeight);
+    button(kTeleportV, padding + 150 + gap + 110 + gap, vToolsY, 170);
+    place(g_vGpuMode, padding + 150 + gap + 110 + gap + 170 + gap, vToolsY,
+          std::max(80, contentWidth - (150 + gap + 110 + gap + 170 + gap)), buttonHeight);
+    place(g_calibrationLabel, padding, calibrationLabelY, contentWidth, headingHeight);
+    const int calibrationEditWidth = (contentWidth - gap * 3) / 4;
+    for (int index = 0; index < 4; ++index) {
+        place(g_saPortalEdits[index], padding + index * (calibrationEditWidth + gap),
+              calibrationEditY, calibrationEditWidth, buttonHeight);
+    }
+    place(g_portalCameraMode, padding, calibrationActionY, 260, buttonHeight);
+    button(kCaptureSaAnchor, padding + 260 + gap, calibrationActionY, 180);
+    button(kSaveCalibration, padding + 260 + gap + 180 + gap, calibrationActionY, 160);
     place(g_vStatus, padding, vStatusY, contentWidth, statusHeight);
     place(g_vPreviewHeading, padding, vPreviewHeadingY, contentWidth, headingHeight);
     place(g_vPreview, padding, vPreviewY, contentWidth, previewHeight);
@@ -629,6 +794,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         AddButton(window, kDisableV, L"仅停用 V 插件");
         AddButton(window, kOverlayV, L"切换测试 HUD");
         AddButton(window, kOpenVLog, L"打开 V 日志");
+        AddButton(window, kTeleportV, L"TP 到 V 葛洛夫街");
+        AddButton(window, kCaptureSaAnchor, L"取当前 SA 人物位置");
+        AddButton(window, kSaveCalibration, L"保存 SA 出口参数");
         g_saHeading = AddHeading(window, L"GTA San Andreas · 开发副本");
         g_vHeading = AddHeading(window, L"GTA V Enhanced · 故事模式开发副本");
         g_vSafety = CreateWindowExW(0, L"STATIC",
@@ -638,6 +806,26 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_saPreviewHeading = AddHeading(window, L"SA 实时画面");
         g_vPreviewHeading = AddHeading(window, L"GTA V 实时画面");
         g_logHeading = AddHeading(window, L"SA 插件日志");
+        g_calibrationLabel = CreateWindowExW(0, L"STATIC",
+            L"Portal Camera 校准 · SA 出口 X / Y / Z / Yaw°（当前版本使用 SA 固定主相机）",
+            WS_CHILD | WS_VISIBLE, 0, 0, 1, 1, window, nullptr, g_instance, nullptr);
+        SendMessageW(g_calibrationLabel, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        for (int index = 0; index < 4; ++index) {
+            g_saPortalEdits[index] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                0, 0, 1, 1, window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSaPortalX + index)),
+                g_instance, nullptr);
+            SendMessageW(g_saPortalEdits[index], WM_SETFONT,
+                         reinterpret_cast<WPARAM>(g_monoFont), TRUE);
+        }
+        UpdateCalibrationEdits();
+        g_portalCameraMode = CreateWindowExW(0, L"BUTTON", L"启用 V → SA Portal 相机",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 1, 1, window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPortalCamera)),
+            g_instance, nullptr);
+        SendMessageW(g_portalCameraMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         g_gpuMode = CreateWindowExW(0, L"BUTTON", L"GPU 窗口捕获（运行中可切换）",
                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                     0, 0, 1, 1, window,
@@ -714,6 +902,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_TIMER:
         if (wParam == kRefreshTimer) Refresh();
         if (wParam == kFrameTimer) {
+            UpdatePortalCamera();
             CaptureGameFrame();
             CaptureVFrame();
             portal_dev::legacy::sa_gpu_preview::Pump(g_frames, g_preview);
@@ -738,6 +927,42 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             Refresh();
             break;
         case kOpenVLog: OpenPath(g_gtaV / L"PortalV.log", L"PortalV.log 尚未生成。"); break;
+        case kTeleportV: {
+            // User-confirmed GTA V Grove Street development spawn, separate from F9's portal plane.
+            const float groveStreet[3]{85.336830f, -1922.733000f, 21.681070f};
+            if (!g_vClient.RequestTeleport(groveStreet, -134.562100f)) {
+                ShowError(L"V 尚未连接", L"请先进入已部署 PortalV.asi 的 GTA V Enhanced 故事模式。");
+            }
+            Refresh();
+            break;
+        }
+        case kPortalCamera:
+            g_portalCameraEnabled =
+                SendMessageW(g_portalCameraMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (g_portalCameraEnabled && !ReadCalibrationEdits()) {
+                g_portalCameraEnabled = false;
+                SendMessageW(g_portalCameraMode, BM_SETCHECK, BST_UNCHECKED, 0);
+                ShowError(L"SA 出口参数无效", L"请为 X、Y、Z 和 Yaw 输入有限数字。");
+            }
+            UpdatePortalCamera();
+            Refresh();
+            break;
+        case kCaptureSaAnchor:
+            if (!g_portalCameraClient.Read(g_saCameraSnapshot) ||
+                !g_saCameraSnapshot.playerValid) {
+                ShowError(L"SA 尚未连接", L"请先进入 SA gameplay；建议在指定位置按 F8 写入日志标记。");
+                break;
+            }
+            g_saPortal[0] = g_saCameraSnapshot.playerPosition[0];
+            g_saPortal[1] = g_saCameraSnapshot.playerPosition[1];
+            g_saPortal[2] = g_saCameraSnapshot.playerPosition[2] + 1.0f;
+            UpdateCalibrationEdits();
+            break;
+        case kSaveCalibration:
+            if (!SaveCalibration()) {
+                ShowError(L"保存失败", L"请检查四个数字以及 dev 游戏目录的写入权限。");
+            }
+            break;
         case kGpuMode:
             g_captureEnabled = SendMessageW(g_gpuMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (!g_captureEnabled) g_capture.Stop();
@@ -761,6 +986,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         KillTimer(window, kFrameTimer);
         g_capture.Stop();
         g_vCapture.Stop();
+        if (g_saCameraConnected) {
+            const float zero[3]{};
+            g_portalCameraClient.Publish(false, zero, zero, zero, 70.0f);
+        }
+        g_portalCameraClient.Disconnect();
         g_vClient.Disconnect();
         portal_dev::legacy::sa_gpu_preview::Stop(g_frames);
         if (g_frames) UnmapViewOfFile(g_frames);
@@ -793,6 +1023,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* commandLine, int s
     g_sourceVAsi = g_repo / L"src" / L"PortalV" / L"bin" / L"x64" / L"Release" / L"PortalV.asi";
     const fs::path savedSa = game_paths::LoadSavedDirectory(L"SaDirectory");
     SetSaDirectory(savedSa.empty() ? g_repo / L"game" / L"dev" / L"GTA San Andreas" : savedSa);
+    LoadCalibration();
     g_gtaV = game_paths::LoadSavedDirectory(L"GtaVEnhancedDirectory");
     if (!g_gtaV.empty()) g_gtaVValid = game_paths::ValidateGtaVDirectory(g_gtaV, g_gtaVVersion);
     if (!StartSupervisor()) {

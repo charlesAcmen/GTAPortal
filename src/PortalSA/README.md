@@ -14,6 +14,10 @@ Start `src/PortalDev/bin/x64/Release/PortalDev.exe`, click **Deploy and open dir
 
 Expected log entries include `PortalSA loaded: GTA SA 1.0 US HOODLUM`, `PortalSA startup: native D3D9 mode`, and `Render output hook installed at RwCameraShowRaster`. In gameplay, `state tick_ms=` records appear approximately every 100 ms. Player and camera values should change when moving and turning. `render_view_row_major` and `render_projection_row_major` are logged when a recent world render provided them. No live BMP file is expected.
 
+For portal-camera calibration, move CJ to the intended SA Grove Street development position and press **F8 while SA is in the foreground**. The plugin writes a high-precision `SA_CALIBRATION_MARKER` containing the player position, heading, camera position and camera forward vector. Normal state records continue as before, so the final gameplay position also remains recoverable from `portal.log`.
+
+PortalDev can drive the SA main camera through `Local\\GTAPortal.PortalCamera.v1`. This is a fixed-camera prototype: it updates source, target and up every game tick, uses SA's fixed-mode FOV of 70 degrees, and automatically calls `RestoreWithJumpCut` when disabled or when commands are stale for more than 500 ms. It is not yet an offscreen second camera.
+
 ## GTA V picture in the SA world (unverified)
 
 The new V consumer creates three 1280×720 D3D9 shared textures and advertises their legacy handles through `Local\GTAPortal.VToSA.v1` (`src/VToSAFrames.h`). PortalDev opens them on its D3D11 capture device and performs a GPU-only BGRA-to-RGBA render. The ASI draws the latest completed frame as a 2.4×1.35 world rectangle with depth testing after the SA scene render. With SA in the foreground, press F9 to place it about 3 m in front of the camera. Placement is saved beside the game EXE in `PortalSAPlane.txt`. If V frames stop for 500 ms, the rectangle is hidden. This is a candidate implementation. Its Release targets compile as of 2026-10-10, but the complete V→SA path has not been tested in-game yet.

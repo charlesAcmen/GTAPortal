@@ -30,6 +30,8 @@ GTA SA's candidate consumer uses `Local\GTAPortal.VToSA.v1` and three GPU textur
 
 For acceptance, build with `& '.\src\Build-Dev.ps1'`, deploy SA to `game/dev/GTA San Andreas`, enable the V GPU window producer, and start both games. In SA gameplay, press F9 and check that the GTA V picture remains fixed as the camera moves, is hidden by SA walls/characters/vehicles in front, and disappears about 500 ms after V capture stops. Check PortalDev's SA consumer status and `portal.log` if the picture is missing. If native sharing fails, enable D3D9Ex diagnostic and restart SA; first verify SA reaches gameplay. No code path or checkbox here prepares a modded GTA V installation for Online.
 
+The Portal Camera calibration section edits the SA exit X/Y/Z/Yaw, captures the current SA player position as a starting exit centre, saves it to `PortalCalibration.txt` beside the dev game, and enables the V-to-SA camera mapping. The mapping uses GTA V's final rendered camera and the accepted V Grove Street plane. Disable the checkbox to restore the normal SA camera; loss of PortalDev commands also restores it automatically. The current implementation intentionally controls SA's main camera and keeps fixed-mode FOV 70, so it proves pose/parallax before a later offscreen-camera milestone.
+
 To build all three Release targets and run the two synthetic GPU smoke tests without launching either game:
 
 ```powershell

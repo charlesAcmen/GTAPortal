@@ -53,9 +53,14 @@ bool PortalVClient::Read(Snapshot& snapshot) {
         const uint64_t frameId = state->frameId;
         float position[3]{};
         float rotation[3]{};
+        float renderedPosition[3]{};
+        float renderedRotation[3]{};
         std::memcpy(position, state->cameraPosition, sizeof(position));
         std::memcpy(rotation, state->cameraRotation, sizeof(rotation));
+        std::memcpy(renderedPosition, state->renderedCameraPosition, sizeof(renderedPosition));
+        std::memcpy(renderedRotation, state->renderedCameraRotation, sizeof(renderedRotation));
         const float fov = state->fovDegrees;
+        const float renderedFov = state->renderedFovDegrees;
         const bool valid = state->cameraValid != 0;
         MemoryBarrier();
         if (before != InterlockedCompareExchange(&state->sequence, 0, 0)) continue;
@@ -70,8 +75,14 @@ bool PortalVClient::Read(Snapshot& snapshot) {
         std::memcpy(snapshot.cameraPosition, position, sizeof(position));
         std::memcpy(snapshot.cameraRotation, rotation, sizeof(rotation));
         snapshot.fovDegrees = fov;
+        std::memcpy(snapshot.renderedCameraPosition, renderedPosition, sizeof(renderedPosition));
+        std::memcpy(snapshot.renderedCameraRotation, renderedRotation, sizeof(renderedRotation));
+        snapshot.renderedFovDegrees = renderedFov;
         snapshot.cameraValid = valid;
         snapshot.overlayEnabled = InterlockedCompareExchange(&state->overlayEnabled, 0, 0) != 0;
+        snapshot.teleportResult = InterlockedCompareExchange(&state->teleportResult, 0, 0);
+        snapshot.teleportAppliedRequest =
+            InterlockedCompareExchange(&state->teleportAppliedRequest, 0, 0);
         return true;
     }
     return false;
@@ -81,5 +92,16 @@ bool PortalVClient::SetOverlayEnabled(bool enabled) {
     Snapshot snapshot;
     if (!Read(snapshot)) return false;
     InterlockedExchange(&view_->state->overlayEnabled, enabled ? 1 : 0);
+    return true;
+}
+
+bool PortalVClient::RequestTeleport(const float (&position)[3], float headingDegrees) {
+    Snapshot snapshot;
+    if (!Read(snapshot)) return false;
+    std::memcpy(view_->state->teleportPosition, position, sizeof(position));
+    view_->state->teleportHeadingDegrees = headingDegrees;
+    MemoryBarrier();
+    InterlockedExchange(&view_->state->teleportResult, portal_v::kTeleportPending);
+    InterlockedIncrement(&view_->state->teleportRequest);
     return true;
 }
