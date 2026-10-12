@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "../../DevelopmentAnchors.h"
 #include "../../PortalVProtocol.h"
 #include "Compositor.h"
 
@@ -21,12 +22,22 @@ float g_planeYaw{};
 bool g_planeValid{};
 // User-confirmed Grove Street calibration position, 2026-10-10. This is a
 // player/vehicle spawn point, deliberately separate from the portal plane.
-float g_spawnPosition[3]{85.336830f, -1922.733000f, 21.681070f};
-float g_spawnHeading{-134.562100f};
+float g_spawnPosition[3]{development_anchors::gta_v::x,
+                         development_anchors::gta_v::y,
+                         development_anchors::gta_v::z};
+float g_spawnHeading{development_anchors::gta_v::headingDegrees};
 bool g_spawnValid{true};
 LONG g_lastTeleportRequest{};
 bool g_autoTeleportQueued{};
 uint64_t g_playerReadySince{};
+
+void Log(const char* message);
+
+bool IsGameForeground() {
+    DWORD processId = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &processId);
+    return processId == GetCurrentProcessId();
+}
 
 bool GameFilePath(const wchar_t* name, wchar_t (&path)[MAX_PATH]) {
     if (!GetModuleFileNameW(g_module, path, MAX_PATH)) return false;
@@ -54,6 +65,14 @@ void SavePlane() {
     fprintf(file, "%.6f %.6f %.6f %.6f\n", g_planeCenter[0], g_planeCenter[1],
             g_planeCenter[2], g_planeYaw);
     fclose(file);
+}
+
+void AdjustPlaneYaw(float deltaDegrees) {
+    if (!g_planeValid || !std::isfinite(deltaDegrees)) return;
+    g_planeYaw = std::remainder(g_planeYaw + deltaDegrees, 360.0f);
+    SavePlane();
+    Log(deltaDegrees < 0.0f ? "PortalV plane yaw adjusted -1 degree (Shift+F9)"
+                            : "PortalV plane yaw adjusted +1 degree (Ctrl+F9)");
 }
 
 void LoadSpawn() {
@@ -236,16 +255,37 @@ void ScriptMain() {
         QueueAutoTeleport(tick);
         ProcessTeleport();
         const bool f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
-        if (f9 && !previousF9 && std::isfinite(renderedPosition.x) && std::isfinite(renderedRotation.z)) {
-            // Anchor in world coordinates once; subsequent camera motion must not move the plane.
-            const float yaw = renderedRotation.z * 0.01745329252f;
-            g_planeCenter[0] = renderedPosition.x - std::sin(yaw) * 3.0f;
-            g_planeCenter[1] = renderedPosition.y + std::cos(yaw) * 3.0f;
-            g_planeCenter[2] = renderedPosition.z;
-            g_planeYaw = renderedRotation.z;
-            g_planeValid = true;
-            SavePlane();
-            Log("PortalV SA plane anchored 3m in front of camera (F9)");
+        if (f9 && !previousF9 && IsGameForeground()) {
+            const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+            const bool control = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            if (shift && !control) {
+                AdjustPlaneYaw(-1.0f);
+            } else if (control && !shift) {
+                AdjustPlaneYaw(1.0f);
+            } else if (std::isfinite(renderedPosition.x) && std::isfinite(renderedPosition.y) &&
+                       std::isfinite(renderedPosition.z) && std::isfinite(renderedRotation.x) &&
+                       std::isfinite(renderedRotation.z)) {
+                // Derive the initial vertical portal from the final rendered camera's
+                // forward vector. No saved Grove Street coordinate participates here.
+                constexpr float kRadians = 0.01745329251994329577f;
+                constexpr float kDegrees = 57.295779513082320876f;
+                const float yaw = renderedRotation.z * kRadians;
+                const float pitch = renderedRotation.x * kRadians;
+                const float forwardX = -std::sin(yaw) * std::cos(pitch);
+                const float forwardY = std::cos(yaw) * std::cos(pitch);
+                const float horizontalLength = std::sqrt(forwardX * forwardX + forwardY * forwardY);
+                if (horizontalLength > 0.0001f) {
+                    const float horizontalX = forwardX / horizontalLength;
+                    const float horizontalY = forwardY / horizontalLength;
+                    g_planeCenter[0] = renderedPosition.x + horizontalX * 3.0f;
+                    g_planeCenter[1] = renderedPosition.y + horizontalY * 3.0f;
+                    g_planeCenter[2] = renderedPosition.z;
+                    g_planeYaw = std::atan2(-horizontalX, horizontalY) * kDegrees;
+                    g_planeValid = true;
+                    SavePlane();
+                    Log("PortalV SA plane anchored from rendered camera forward (F9)");
+                }
+            }
         }
         previousF9 = f9;
         const bool f10 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
@@ -302,6 +342,11 @@ void ScriptMain() {
             g_state->renderedCameraRotation[1] = renderedRotation.y;
             g_state->renderedCameraRotation[2] = renderedRotation.z;
             g_state->renderedFovDegrees = renderedFov;
+            g_state->portalPlaneCenter[0] = g_planeCenter[0];
+            g_state->portalPlaneCenter[1] = g_planeCenter[1];
+            g_state->portalPlaneCenter[2] = g_planeCenter[2];
+            g_state->portalPlaneYawDegrees = g_planeYaw;
+            g_state->portalPlaneValid = g_planeValid ? 1u : 0u;
             g_state->cameraValid = std::isfinite(renderedFov) && renderedFov > 0.0f;
             InterlockedIncrement(&g_state->sequence);
             if (InterlockedCompareExchange(&g_state->overlayEnabled, 0, 0)) DrawTestPattern(tick);

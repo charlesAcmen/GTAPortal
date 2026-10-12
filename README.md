@@ -66,6 +66,7 @@ The second command builds the pinned upstream source as x86 and copies only its 
 - `src/docs/PROJECT_RESOURCES.md`: resource inventory and architectural analysis.
 - `src/docs/MILESTONE_2026-10-09.md`: verified current state, observations, and next measurements.
 - `src/docs/MILESTONE_2026-10-10.md`: current dual-direction GPU bridge milestone, accepted behavior, failed D3D9Ex experiment, and remaining in-game checks.
+- `src/docs/MILESTONE_V_TO_SA_2026-10-12.md`: user-confirmed GTA V picture in the SA world, the inherited depth/stencil-state fix, and remaining measurements.
 - `src/docs/MILESTONE_SA_TO_V_2026-10-09.md`: SA→V candidate implementation, tests, and game acceptance steps.
 - `src/docs/CODE_AUDIT_2026-10-10.md`: current source inventory, GPU data flows, evidence boundaries, and cleanup priorities.
 - `src/docs/CROSS_GAME_REFERENCES.md`: read-only mashup source index and a plain-language explanation of the current SA frame path.

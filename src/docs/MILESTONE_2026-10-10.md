@@ -8,10 +8,10 @@
 | --- | --- | --- |
 | SA → GTA V 生产与消费 | PortalDev 捕获 SA 窗口的最新 GPU 帧，发布到三个带 keyed mutex 的命名 D3D11 共享纹理；PortalV 通过 D3D11 → D3D12 GPU 桥复制到 GTA V 可采样纹理，ReShade 在世界空间平面上显示 | 用户已在 GTA V 中启用 `PortalSA` 技术并看到实时 SA 画面；当次画面仍带 Windows 窗口边框 |
 | SA 客户区裁剪 | PortalDev 在 GPU 内用 `CopySubresourceRegion` 只复制客户区，不做整帧 CPU 回读；坐标查询改为物理像素，并按 WGC 纹理尺寸映射，状态栏会显示裁剪尺寸和偏移 | Release 构建通过；最新 DPI/坐标修复尚待游戏内复验，不能把边框问题标记为已关闭 |
-| GTA V → SA 候选管线 | PortalDev 捕获 GTA V 窗口，在 GPU 内写入 SA 拥有的三个 D3D9/D3D11 共享槽；PortalSA 选择最新完成槽并绘制深度测试世界矩形 | 代码构建通过；尚未完成 GTA SA 游戏内画面、遮挡和稳定性验收 |
+| GTA V → SA 候选管线 | PortalDev 用三个 staging 纹理异步读回，写入动态尺寸的三槽 CPU 最新帧邮箱；PortalSA 将最新帧上传到自己的三槽 D3D9 纹理并绘制深度测试世界矩形 | Release 构建和像素完整性 smoke test 通过；尚未完成 GTA SA 游戏内画面、遮挡、延迟和稳定性验收 |
 | 三槽最新帧协议 | 生产者循环使用三个槽；消费者读取最新 `Ready` 帧；允许覆盖未读取旧帧，但不覆盖 `Reading` 槽。资源重建使用进程级唯一 generation | `SAFramePublisherSmoke` 验证发布、覆盖和重建；generation 重用问题已修复 |
 | GTA V 深度遮挡 | `PortalSA.fx` 采样 GTA V 本帧场景深度，并将门户平面深度与场景深度比较 | 使用原生场景深度，不硬编码人物、车辆或墙；真实场景中的遮挡边界仍需专项验收 |
-| 开发工具整理 | 删除无人消费的通用 `VFrames` 通道；旧 SA 内部生产者和 D3D9Ex 整机替换代码迁入 `legacy/diagnostics`；构建脚本可选择运行两个 GPU smoke tests | Release 构建和现有两个 smoke tests通过 |
+| 开发工具整理 | 删除无人消费的通用 `VFrames` 通道；旧 SA 内部生产者和 D3D9Ex 整机替换代码迁入 `legacy/diagnostics`；构建脚本可选择运行三个 bridge smoke tests | Release 构建和三个 smoke tests 通过 |
 
 ## 当前正式架构
 
@@ -26,11 +26,13 @@ GTA SA 客户区
 GTA V 客户区
   -> Windows Graphics Capture（GPU 纹理）
   -> GPU 客户区裁剪
-  -> 3 槽 D3D9/D3D11 共享纹理
+  -> 3 槽 D3D11 staging 异步 DMA 读回
+  -> 动态分辨率 3 槽 CPU 最新帧邮箱
+  -> SA 3 槽本地上传纹理
   -> PortalSA 世界矩形（候选，待游戏内验收）
 ```
 
-整帧像素不经过 CPU 内存。CPU 只负责窗口坐标、槽状态、帧号、时间戳和同步控制。三个槽是低延迟最新帧环形池：它避免生产者等待慢消费者，但不承诺每一帧都被消费。
+SA → V 方向的整帧像素不经过 CPU。V → SA 因普通 D3D9 不支持 D3D11 跨进程共享表面，整帧像素经过异步 GPU 读回、共享内存和 SA 本地上传；CPU 控制区还负责槽状态、帧号、时间戳和同步。三个槽是低延迟最新帧环形池：它避免生产者等待慢消费者，但不承诺每一帧都被消费。
 
 ## 放弃作为正式路径的方案
 

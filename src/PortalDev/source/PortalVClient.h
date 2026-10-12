@@ -15,6 +15,9 @@ public:
         float renderedCameraPosition[3]{};
         float renderedCameraRotation[3]{};
         float renderedFovDegrees = 0;
+        float portalPlaneCenter[3]{};
+        float portalPlaneYawDegrees = 0;
+        bool portalPlaneValid = false;
         bool cameraValid = false;
         bool overlayEnabled = false;
         LONG teleportResult = 0;

@@ -1,0 +1,18 @@
+# GTAPortal Grove Street development anchors
+# Recorded 2026-10-10. Coordinates are game-local; do not treat either as a portal-plane centre.
+
+[GTA V Enhanced]
+# Current final rendered camera while user confirmed they were at the intended Grove Street position.
+# Use as the provisional GTA V development teleport target until an F10 entity-position capture replaces it.
+position = 85.336830 -1922.733000 21.681070
+yaw_degrees = -134.562100
+fov_degrees = 50.000000
+
+[GTA San Andreas]
+# Last user-confirmed F8 SA_CALIBRATION_MARKER. This is the future CJ teleport landing point.
+position = 2468.331787 -1661.175537 13.321789
+heading_radians = -1.892188
+heading_degrees = -108.414386
+# Diagnostic camera data at the same marker; not the portal centre.
+camera_position = 2464.972656 -1660.198242 14.024800
+camera_forward = 0.959775 -0.279224 -0.029441

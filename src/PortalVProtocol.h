@@ -5,9 +5,9 @@
 
 namespace portal_v {
 
-constexpr wchar_t kMappingName[] = L"Local\\GTAPortal.VState.v2";
+constexpr wchar_t kMappingName[] = L"Local\\GTAPortal.VState.v3";
 constexpr uint32_t kMagic = 0x31565447; // GTV1
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 3;
 
 enum TeleportResult : LONG {
     kTeleportIdle = 0,
@@ -41,8 +41,11 @@ struct SharedState {
     volatile LONG teleportResult;
     float teleportPosition[3];
     float teleportHeadingDegrees;
+    float portalPlaneCenter[3];
+    float portalPlaneYawDegrees;
+    uint32_t portalPlaneValid;
 };
 
-static_assert(sizeof(SharedState) == 128);
+static_assert(sizeof(SharedState) == 152);
 
 } // namespace portal_v

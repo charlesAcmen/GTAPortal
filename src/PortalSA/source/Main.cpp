@@ -10,6 +10,7 @@
 
 #include "StateCapture.h"
 #include "CameraOverride.h"
+#include "DevTeleport.h"
 #include "VConsumer.h"
 #include "legacy/diagnostics/D3D9ExBridge.h"
 #include "legacy/diagnostics/SaGpuProducer.h"
@@ -69,6 +70,7 @@ bool Initialize() {
 void OnGameProcess() {
     if (!Initialize()) return;
     portal_sa::state::OnGameProcess(Log);
+    portal_sa::dev_teleport::OnGameProcess(Log);
     portal_sa::camera_override::OnGameProcess(Log);
     portal_sa::v_consumer::OnGameProcess([](const char* message) { Log(message); });
 }

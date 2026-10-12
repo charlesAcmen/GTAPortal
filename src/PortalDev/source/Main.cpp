@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "../../DevelopmentAnchors.h"
 #include "../../PortalProtocol.h"
 #include "../../PortalVProtocol.h"
 #include "GpuCapture.h"
@@ -363,7 +364,7 @@ void UpdatePortalCamera() {
         g_vSnapshot = liveV;
         g_vConnected = true;
     }
-    if (!g_portalCameraEnabled || !vReady) {
+    if (!g_portalCameraEnabled || !vReady || !liveV.portalPlaneValid) {
         if (g_saCameraConnected) {
             const float zero[3]{};
             g_portalCameraClient.Publish(false, zero, zero, zero, 70.0f);
@@ -371,8 +372,9 @@ void UpdatePortalCamera() {
         return;
     }
 
-    constexpr Vec3f vCenter{96.491821f, -1932.880859f, 21.770508f};
-    constexpr float vYaw = -133.509491f;
+    const Vec3f vCenter{liveV.portalPlaneCenter[0], liveV.portalPlaneCenter[1],
+                        liveV.portalPlaneCenter[2]};
+    const float vYaw = liveV.portalPlaneYawDegrees;
     Vec3f vRight{}, vForward{}, vUp{};
     Vec3f saRight{}, saForward{}, saUp{};
     PortalBasis(vYaw, vRight, vForward, vUp);
@@ -478,6 +480,15 @@ void Refresh() {
                 << g_vSnapshot.renderedCameraPosition[1] << L", "
                 << g_vSnapshot.renderedCameraPosition[2] << L") FOV "
                 << g_vSnapshot.renderedFovDegrees << L"\r\n";
+        if (g_vSnapshot.portalPlaneValid) {
+            vStatus << L"V 门锚点：("
+                    << g_vSnapshot.portalPlaneCenter[0] << L", "
+                    << g_vSnapshot.portalPlaneCenter[1] << L", "
+                    << g_vSnapshot.portalPlaneCenter[2] << L") yaw "
+                    << g_vSnapshot.portalPlaneYawDegrees << L"°\r\n";
+        } else {
+            vStatus << L"V 门锚点：等待 GTA V 前台按 F9\r\n";
+        }
     }
     const wchar_t* teleportStatus = L"未请求";
     switch (g_vSnapshot.teleportResult) {
@@ -929,8 +940,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         case kOpenVLog: OpenPath(g_gtaV / L"PortalV.log", L"PortalV.log 尚未生成。"); break;
         case kTeleportV: {
             // User-confirmed GTA V Grove Street development spawn, separate from F9's portal plane.
-            const float groveStreet[3]{85.336830f, -1922.733000f, 21.681070f};
-            if (!g_vClient.RequestTeleport(groveStreet, -134.562100f)) {
+            const float groveStreet[3]{development_anchors::gta_v::x,
+                                       development_anchors::gta_v::y,
+                                       development_anchors::gta_v::z};
+            if (!g_vClient.RequestTeleport(
+                    groveStreet, development_anchors::gta_v::headingDegrees)) {
                 ShowError(L"V 尚未连接", L"请先进入已部署 PortalV.asi 的 GTA V Enhanced 故事模式。");
             }
             Refresh();

@@ -55,12 +55,16 @@ bool PortalVClient::Read(Snapshot& snapshot) {
         float rotation[3]{};
         float renderedPosition[3]{};
         float renderedRotation[3]{};
+        float portalPlaneCenter[3]{};
         std::memcpy(position, state->cameraPosition, sizeof(position));
         std::memcpy(rotation, state->cameraRotation, sizeof(rotation));
         std::memcpy(renderedPosition, state->renderedCameraPosition, sizeof(renderedPosition));
         std::memcpy(renderedRotation, state->renderedCameraRotation, sizeof(renderedRotation));
+        std::memcpy(portalPlaneCenter, state->portalPlaneCenter, sizeof(portalPlaneCenter));
         const float fov = state->fovDegrees;
         const float renderedFov = state->renderedFovDegrees;
+        const float portalPlaneYaw = state->portalPlaneYawDegrees;
+        const bool portalPlaneValid = state->portalPlaneValid != 0;
         const bool valid = state->cameraValid != 0;
         MemoryBarrier();
         if (before != InterlockedCompareExchange(&state->sequence, 0, 0)) continue;
@@ -78,6 +82,9 @@ bool PortalVClient::Read(Snapshot& snapshot) {
         std::memcpy(snapshot.renderedCameraPosition, renderedPosition, sizeof(renderedPosition));
         std::memcpy(snapshot.renderedCameraRotation, renderedRotation, sizeof(renderedRotation));
         snapshot.renderedFovDegrees = renderedFov;
+        std::memcpy(snapshot.portalPlaneCenter, portalPlaneCenter, sizeof(portalPlaneCenter));
+        snapshot.portalPlaneYawDegrees = portalPlaneYaw;
+        snapshot.portalPlaneValid = portalPlaneValid;
         snapshot.cameraValid = valid;
         snapshot.overlayEnabled = InterlockedCompareExchange(&state->overlayEnabled, 0, 0) != 0;
         snapshot.teleportResult = InterlockedCompareExchange(&state->teleportResult, 0, 0);
