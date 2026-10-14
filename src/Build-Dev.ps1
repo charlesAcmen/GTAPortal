@@ -15,6 +15,11 @@ $portalVProject = Join-Path $repo 'src\PortalV\PortalV.vcxproj'
 $publisherTestProject = Join-Path $repo 'src\tests\SAFramePublisherSmoke.vcxproj'
 $bridgeTestProject = Join-Path $repo 'src\tests\D3D11D3D12BridgeSmoke.vcxproj'
 $vToSaTestProject = Join-Path $repo 'src\tests\VToSACpuBridgeSmoke.vcxproj'
+$saOffscreenTestProject = Join-Path $repo 'src\tests\SAOffscreenCpuBridgeSmoke.vcxproj'
+$cameraProjectionTestProject = Join-Path $repo 'src\tests\CameraProjectionSmoke.vcxproj'
+$shaderCompiler = Join-Path $repo 'third_party\ReShade\bin\x64\Release\fxc.exe'
+$portalShader = Join-Path $repo 'src\PortalV\shaders\PortalSA.fx'
+$shaderInclude = Join-Path $repo 'reference\Gta-V-Enhanced-Minecraft-Steve-Passthrough\mods\GTA_V\reshade-shaders\Shaders'
 $sdkProject = Join-Path $sdk 'plugin_sa\Plugin_SA.vcxproj'
 $sdkLibrary = Join-Path $sdk 'output\lib\Plugin.lib'
 
@@ -84,6 +89,15 @@ if (-not $SkipTool) {
         "/p:PlatformToolset=$($toolchain.Toolset)" '/m' '/v:minimal'
     if ($LASTEXITCODE -ne 0) { throw "PortalV build failed with exit code $LASTEXITCODE" }
 
+    if (-not (Test-Path -LiteralPath $shaderCompiler)) {
+        throw "ReShade shader compiler is missing: $shaderCompiler"
+    }
+    $shaderOutput = & $shaderCompiler '-I' $shaderInclude $portalShader 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "PortalSA.fx validation failed:`n$($shaderOutput -join [Environment]::NewLine)"
+    }
+    Write-Host 'PortalSA.fx ReShade compilation passed.'
+
     & $toolchain.MSBuild $toolProject `
         '/p:Configuration=Release' '/p:Platform=x64' `
         "/p:PlatformToolset=$($toolchain.Toolset)" '/m' '/v:minimal'
@@ -106,6 +120,16 @@ if ($RunTests) {
             Name = 'VToSACpuBridgeSmoke'
             Project = $vToSaTestProject
             Executable = Join-Path $repo 'src\tests\bin\x64\VToSACpuBridgeSmoke\VToSACpuBridgeSmoke.exe'
+        },
+        @{
+            Name = 'SAOffscreenCpuBridgeSmoke'
+            Project = $saOffscreenTestProject
+            Executable = Join-Path $repo 'src\tests\bin\x64\SAOffscreenCpuBridgeSmoke\SAOffscreenCpuBridgeSmoke.exe'
+        },
+        @{
+            Name = 'CameraProjectionSmoke'
+            Project = $cameraProjectionTestProject
+            Executable = Join-Path $repo 'src\tests\bin\x64\CameraProjectionSmoke\CameraProjectionSmoke.exe'
         }
     )
     foreach ($test in $tests) {

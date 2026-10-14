@@ -1,6 +1,6 @@
 # GTAPortal
 
-GTAPortal explores a real-time portal between GTA San Andreas and GTA V Enhanced. PortalDev captures both game windows through Windows Graphics Capture and publishes their frames through separate three-slot GPU texture channels, without a full-frame CPU readback. PortalV is an x64 Script Hook V ASI and ReShade add-on: F9 anchors a world-fixed picture plane, and the effect uses GTA V scene depth for visual occlusion. On 2026-10-10, the user enabled the `PortalSA` technique and confirmed live SA picture display inside GTA V; the observed source still contained the Windows frame, and the subsequent physical-pixel client-area crop fix still needs in-game acceptance. A candidate V→SA consumer draws PortalDev's GTA V capture on a depth-tested SA world rectangle through D3D9/D3D11 GPU sharing. The reverse path builds but has not been accepted in-game yet.
+GTAPortal explores a real-time portal between GTA San Andreas and GTA V Enhanced. PortalDev transports both directions and keeps three-slot latest-frame channels so slow consumers do not stall either game. PortalV is an x64 Script Hook V ASI and ReShade add-on: F9 anchors a persistent, live-calibrated world portal and the effect uses GTA V scene depth for visual occlusion. Both games draw an 8 m circular, depth-tested aperture with its bottom 0.6 m below the ground; the 16:9 source is centre-cropped to a square without stretching. For SA→V, PortalDev maps GTA V's final rendered pose and FOV onto SA's normal main camera and captures that stable window through WGC; the experimental offscreen second camera is disabled. Both visible directions were user-confirmed before the overlap milestone; the enlarged circular geometry, visibility switches, main-camera alignment, clipping, and Lock In still require combined in-game acceptance.
 
 ## Clone on another device
 
@@ -55,10 +55,11 @@ The second command builds the pinned upstream source as x86 and copies only its 
 
 ## Repository layout
 
-- `src/PortalSA/`: x86 ASI, camera probe, and candidate V→SA world rectangle. The earlier D3D9Ex bridge is available only through an opt-in development diagnostic switch.
+- `src/PortalSA/`: x86 ASI, camera probe, V→SA world aperture, and SA offscreen portal-camera renderer. The earlier D3D9Ex bridge is available only through an opt-in development diagnostic switch.
 - `src/PortalV/`: x64 Enhanced ASI with the camera probe and candidate SA→V ReShade picture plane.
 - `src/PortalDev/`: x64 development tool with WGC previews and both cross-game GPU bridges.
 - `src/SAToVFrames.h`: latest-frame, three-slot SA-to-V GPU texture publishing protocol.
+- `src/SAToVOffscreenFrames.h`: PortalSA-owned three-slot CPU mailbox for the offscreen SA portal camera before PortalDev republishes it to the GPU channel.
 - `src/Build-Dev.ps1`: reproducible build entry that selects a complete local MSVC toolchain.
 - `src/Install-DevWindowedMode.ps1`: one-time per-workstation build/install helper for the optional windowed-mode dependency.
 - `src/config/III.VC.SA.WindowedMode.ini`: reproducible dual-monitor debug defaults (1600x900 window, no pause on focus loss).
@@ -67,6 +68,7 @@ The second command builds the pinned upstream source as x86 and copies only its 
 - `src/docs/MILESTONE_2026-10-09.md`: verified current state, observations, and next measurements.
 - `src/docs/MILESTONE_2026-10-10.md`: current dual-direction GPU bridge milestone, accepted behavior, failed D3D9Ex experiment, and remaining in-game checks.
 - `src/docs/MILESTONE_V_TO_SA_2026-10-12.md`: user-confirmed GTA V picture in the SA world, the inherited depth/stencil-state fix, and remaining measurements.
+- `src/docs/MILESTONE_OVERLAP_CALIBRATION_2026-10-12.md`: final-render-camera/FOV alignment, CJ-hidden synchronized rendering, circular clipping, independent visibility switches, and F9 live calibration with explicit Lock In persistence.
 - `src/docs/MILESTONE_SA_TO_V_2026-10-09.md`: SA→V candidate implementation, tests, and game acceptance steps.
 - `src/docs/CODE_AUDIT_2026-10-10.md`: current source inventory, GPU data flows, evidence boundaries, and cleanup priorities.
 - `src/docs/CROSS_GAME_REFERENCES.md`: read-only mashup source index and a plain-language explanation of the current SA frame path.
