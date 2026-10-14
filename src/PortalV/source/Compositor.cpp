@@ -2,19 +2,24 @@
 #define NOMINMAX
 #include "Compositor.h"
 #include "../../SAToVFrames.h"
+#include "PortalCalibration.h"
 
 #include <windows.h>
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <imgui.h>
 #include <reshade.hpp>
 #include <wrl/client.h>
 
 #include <array>
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 namespace api = reshade::api;
@@ -51,6 +56,9 @@ uint64_t g_skipped = 0;
 std::array<SharedSource, frames::kSlotCount> g_sources;
 std::array<DisplaySlot, 3> g_display;
 int g_activeDisplay = -1;
+std::atomic<bool> g_openOverlayRequested{};
+std::atomic<bool> g_reloadEffectsRequested{};
+bool g_orderChecked{};
 int g_pendingRetire = -1;
 UINT g_width = 0;
 UINT g_height = 0;
@@ -210,7 +218,13 @@ void SetUniforms(api::effect_runtime* runtime, const Pose& pose, bool active) {
     setFloat("CameraPlanes", pose.nearClip, pose.farClip);
     setFloat("PlaneCenter", pose.planeCenter[0], pose.planeCenter[1], pose.planeCenter[2]);
     setFloat("PlaneYaw", pose.planeYaw);
-    setFloat("PlaneSize", 2.4f, 1.35f);
+    setFloat("PlaneSize", pose.planeSize[0], pose.planeSize[1]);
+    setFloat("PlaneCrop", pose.planeCrop[0], pose.planeCrop[1],
+             pose.planeCrop[2], pose.planeCrop[3]);
+    setFloat("CornerRadius", pose.cornerRadius);
+    setFloat("EdgeFeather", pose.edgeFeather);
+    const auto shape = runtime->find_uniform_variable("PortalSA.fx", "PlaneShape");
+    if (shape.handle) runtime->set_uniform_value_int(shape, &pose.planeShape, 1);
     setFloat("SAFrameSize", static_cast<float>(g_width), static_cast<float>(g_height));
 }
 
@@ -218,6 +232,23 @@ void OnBegin(api::effect_runtime* runtime, api::command_list* commands,
              api::resource_view, api::resource_view) {
     if (g_runtime && g_runtime != runtime) ResetRuntime(g_runtime);
     g_runtime = runtime;
+    if(g_openOverlayRequested.exchange(false,std::memory_order_relaxed))
+        runtime->open_overlay(true,api::input_source::keyboard);
+    if(g_reloadEffectsRequested.exchange(false,std::memory_order_relaxed))
+        runtime->reload_effect_next_frame("PortalSA.fx");
+    if(!g_orderChecked){
+        std::vector<api::effect_technique> techniques;
+        runtime->enumerate_techniques(nullptr,[&](api::effect_runtime*,api::effect_technique technique){
+            techniques.push_back(technique);
+        });
+        const auto portal=runtime->find_technique("PortalSA.fx","PortalSA");
+        const auto found=std::find(techniques.begin(),techniques.end(),portal);
+        if(portal.handle&&found!=techniques.end()&&std::next(found)!=techniques.end()){
+            techniques.erase(found);techniques.push_back(portal);
+            runtime->reorder_techniques(techniques.size(),techniques.data());
+        }
+        g_orderChecked=true;
+    }
     Pose pose;
     { std::lock_guard lock(g_poseMutex); pose = g_pose; }
     if (!pose.planeValid) {
@@ -338,9 +369,11 @@ void OnDestroy(api::effect_runtime* runtime) {
     if (runtime != g_runtime) return;
     ResetRuntime(runtime);
     g_runtime = nullptr;
+    g_orderChecked=false;
 }
 
 void OnReload(api::effect_runtime* runtime) {
+    g_orderChecked=false;
     if (runtime == g_runtime && g_activeDisplay >= 0) {
         runtime->update_texture_bindings("SAFRAME", g_display[g_activeDisplay].view,
                                          g_display[g_activeDisplay].view);
@@ -357,6 +390,7 @@ bool TryRegister(HMODULE module) {
     reshade::register_event<reshade::addon_event::reshade_present>(OnPresent);
     reshade::register_event<reshade::addon_event::reshade_reloaded_effects>(OnReload);
     reshade::register_event<reshade::addon_event::destroy_effect_runtime>(OnDestroy);
+    reshade::register_overlay("GTAPortal Calibration", calibration::DrawOverlay);
     g_registered = true;
     return true;
 }
@@ -366,8 +400,12 @@ void SetPose(const Pose& pose) {
     g_pose = pose;
 }
 
+void OpenCalibrationOverlay(){g_openOverlayRequested.store(true,std::memory_order_relaxed);}
+void ReloadEffects(){g_reloadEffectsRequested.store(true,std::memory_order_relaxed);}
+
 void Unregister(HMODULE module) {
     if (!g_registered) return;
+    reshade::unregister_overlay("GTAPortal Calibration", calibration::DrawOverlay);
     reshade::unregister_addon(module);
     g_registered = false;
 }

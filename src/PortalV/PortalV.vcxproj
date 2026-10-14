@@ -24,7 +24,7 @@
     <ClCompile>
       <WarningLevel>Level4</WarningLevel><Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary><LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\..\third_party\ScriptHookV_SDK_1.0.617.1a\inc;$(ProjectDir)..\..\third_party\ReShade\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\third_party\ScriptHookV_SDK_1.0.617.1a\inc;$(ProjectDir)..\..\third_party\ReShade\include;$(ProjectDir)..\..\third_party\ReShade\deps\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 /wd4127 /wd4505 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -33,6 +33,6 @@
       <AdditionalDependencies>ScriptHookV.lib;d3d11.lib;d3d12.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="source\Main.cpp" /><ClCompile Include="source\Compositor.cpp" /></ItemGroup>
+  <ItemGroup><ClCompile Include="source\Main.cpp" /><ClCompile Include="source\Compositor.cpp" /><ClCompile Include="source\PortalCalibration.cpp" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
