@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "../../DevelopmentAnchors.h"
+#include "../../PortalVisualConfig.h"
 #include "../../PortalProtocol.h"
 #include "../../PortalVProtocol.h"
 #include "GpuCapture.h"
@@ -22,7 +23,6 @@
 #include "GameProcess.h"
 #include "PortalVClient.h"
 #include "PortalCameraClient.h"
-#include "legacy/diagnostics/SaGpuPreview.h"
 
 namespace fs = std::filesystem;
 
@@ -35,24 +35,19 @@ constexpr UINT_PTR kFrameTimer = 2;
 enum ControlId : int {
     kBuild = 1001,
     kDeploy = 1002,
-    kLaunch = 1003,
-    kDeployLaunch = 1004,
-    kRefresh = 1005,
     kOpenLog = 1006,
-    kDisable = 1009,
-    kGpuMode = 1010,
     kSelectSa = 1011,
     kSelectGtaV = 1012,
     kDeployV = 1013,
-    kDisableV = 1014,
-    kOverlayV = 1015,
     kOpenVLog = 1016,
-    kVCaptureMode = 1017,
-    kExDiagnostic = 1018,
     kTeleportV = 1019,
     kPortalCamera = 1020,
     kCaptureSaAnchor = 1021,
     kSaveCalibration = 1022,
+    kShowVPortal = 1023,
+    kShowSaPortal = 1024,
+    kHotReloadVFx = 1025,
+    kSaToVCamera = 1026,
     kSaPortalX = 1030,
     kSaPortalY = 1031,
     kSaPortalZ = 1032,
@@ -63,19 +58,13 @@ HINSTANCE g_instance{};
 HWND g_window{};
 HWND g_saStatus{};
 HWND g_vStatus{};
-HWND g_logView{};
-HWND g_preview{};
-HWND g_vPreview{};
 HWND g_saHeading{};
 HWND g_vHeading{};
 HWND g_vSafety{};
-HWND g_saPreviewHeading{};
-HWND g_vPreviewHeading{};
-HWND g_logHeading{};
-HWND g_gpuMode{};
-HWND g_vGpuMode{};
-HWND g_exMode{};
 HWND g_portalCameraMode{};
+HWND g_saToVCameraMode{};
+HWND g_showVPortalMode{};
+HWND g_showSaPortalMode{};
 HWND g_saPortalEdits[4]{};
 HWND g_calibrationLabel{};
 HFONT g_uiFont{};
@@ -100,8 +89,17 @@ bool g_vConnected{};
 PortalCameraClient g_portalCameraClient;
 PortalCameraClient::Snapshot g_saCameraSnapshot;
 bool g_saCameraConnected{};
+uint32_t g_lastSaPortalPlacementSequence{};
 bool g_portalCameraEnabled{};
-float g_saPortal[4]{2495.3301f, -1690.2500f, 15.7656f, 0.0f};
+bool g_saToVCameraEnabled{};
+bool g_showVPortal{true};
+bool g_showSaPortal{};
+// The confirmed SA development TP is the portal ground contact. Store the
+// camera-mapping origin at the center of the default 2.4 x 1.35 m aperture.
+float g_saPortal[4]{portal_visual::gta_sa::groundX,
+                    portal_visual::gta_sa::groundY,
+                    portal_visual::gta_sa::groundZ + portal_visual::kCenterAboveGround,
+                    portal_visual::gta_sa::yawDegrees};
 HANDLE g_mapping{};
 HANDLE g_supervisorMutex{};
 portal::SharedFrames* g_frames{};
@@ -110,14 +108,8 @@ int64_t g_lastRefreshQpc{};
 int g_scrollY{};
 std::wstring g_saStatusText;
 std::wstring g_vStatusText;
-std::wstring g_logText;
 GpuCapture g_capture;
 GpuCapture g_vCapture;
-bool g_captureEnabled = true;
-bool g_vCaptureEnabled = true;
-// Diagnostic builds intentionally start at the currently selected staged test.
-// Keep the UI state and the shared control value in sync at startup.
-bool g_exDiagnostic = false;
 DWORD g_lastCaptureAttemptTick{};
 DWORD g_lastVCaptureAttemptTick{};
 uint64_t g_lastCaptureFrames{};
@@ -223,7 +215,7 @@ bool StartSupervisor() {
         MemoryBarrier();
         g_frames->magic = portal::kMagic;
     }
-    InterlockedExchange(&g_frames->bridgeEnabled, g_exDiagnostic ? 3 : 0);
+    InterlockedExchange(&g_frames->bridgeEnabled, 0);
     QueryPerformanceFrequency(&g_qpcFrequency);
     return true;
 }
@@ -235,10 +227,6 @@ int64_t Qpc() {
 }
 
 void CaptureGameFrame() {
-    if (!g_captureEnabled) {
-        g_capture.Stop();
-        return;
-    }
     DWORD pid = 0;
     const HWND gameWindow = IsGameRunning(&pid) ? game_process::FindVisibleWindow(pid) : nullptr;
     if (!gameWindow) {
@@ -250,13 +238,14 @@ void CaptureGameFrame() {
         const DWORD now = GetTickCount();
         if (g_lastCaptureAttemptTick && now - g_lastCaptureAttemptTick < 2000) return;
         g_lastCaptureAttemptTick = now;
-        if (!g_capture.Start(gameWindow, g_preview, GpuCapture::Publication::Sa)) return;
+        // Transport stays active, but PortalDev does not create a preview swap chain by default.
+        if (!g_capture.Start(gameWindow, nullptr, GpuCapture::Publication::Sa)) return;
     }
     g_capture.Pump();
 }
 
 void CaptureVFrame() {
-    if (!g_vCaptureEnabled || !g_gtaVValid) {
+    if (!g_gtaVValid) {
         g_vCapture.Stop();
         return;
     }
@@ -272,7 +261,7 @@ void CaptureVFrame() {
     g_lastVCaptureAttemptTick = now;
     DWORD pid = 0;
     const HWND gameWindow = IsVRunning(&pid) ? game_process::FindVisibleWindow(pid) : nullptr;
-    if (gameWindow && g_vCapture.Start(gameWindow, g_vPreview, GpuCapture::Publication::V)) g_vCapture.Pump();
+    if (gameWindow && g_vCapture.Start(gameWindow, nullptr, GpuCapture::Publication::V)) g_vCapture.Pump();
 }
 
 void UpdateText(HWND control, std::wstring& previous, const std::wstring& next, bool followTail) {
@@ -295,9 +284,32 @@ void UpdateText(HWND control, std::wstring& previous, const std::wstring& next, 
 
 void LoadCalibration() {
     std::ifstream file(g_dev / L"PortalCalibration.txt");
+    if (!file) return;
+    std::string line;
+    std::getline(file, line);
+    std::istringstream input(line);
+    int version = 0;
     float value[4]{};
-    if (file >> value[0] >> value[1] >> value[2] >> value[3]) {
+    if (input >> version && version == 3 &&
+        input >> value[0] >> value[1] >> value[2] >> value[3]) {
         std::copy(std::begin(value), std::end(value), std::begin(g_saPortal));
+        return;
+    }
+    std::istringstream versionTwo(line);
+    if (versionTwo >> version && version == 2 &&
+        versionTwo >> value[0] >> value[1] >> value[2] >> value[3]) {
+        g_saPortal[0] = value[0];
+        g_saPortal[1] = value[1];
+        g_saPortal[2] = value[2] + portal_visual::kCenterAboveGround;
+        g_saPortal[3] = value[3];
+        return;
+    }
+    std::istringstream legacy(line);
+    if (legacy >> value[0] >> value[1] >> value[2] >> value[3]) {
+        g_saPortal[0] = value[0];
+        g_saPortal[1] = value[1];
+        g_saPortal[2] = value[2] - 1.10f + portal_visual::kCenterAboveGround;
+        g_saPortal[3] = value[3];
     }
 }
 
@@ -327,9 +339,10 @@ bool SaveCalibration() {
     if (!ReadCalibrationEdits()) return false;
     std::ofstream file(g_dev / L"PortalCalibration.txt", std::ios::trunc);
     if (!file) return false;
-    file << std::fixed << std::setprecision(6)
+    file << "3 " << std::fixed << std::setprecision(6)
          << g_saPortal[0] << ' ' << g_saPortal[1] << ' '
-         << g_saPortal[2] << ' ' << g_saPortal[3] << '\n';
+         << g_saPortal[2] << ' '
+         << g_saPortal[3] << '\n';
     return file.good();
 }
 
@@ -358,35 +371,68 @@ Vec3f MapBasisVector(Vec3f value, Vec3f sourceRight, Vec3f sourceForward, Vec3f 
 
 void UpdatePortalCamera() {
     g_saCameraConnected = g_portalCameraClient.Read(g_saCameraSnapshot);
+    if (g_saCameraConnected && g_saCameraSnapshot.portalPlacementSequence &&
+        g_saCameraSnapshot.portalPlacementSequence != g_lastSaPortalPlacementSequence) {
+        g_lastSaPortalPlacementSequence = g_saCameraSnapshot.portalPlacementSequence;
+        g_saPortal[0] = g_saCameraSnapshot.portalPlacement[0];
+        g_saPortal[1] = g_saCameraSnapshot.portalPlacement[1];
+        g_saPortal[2] = g_saCameraSnapshot.portalPlacement[2];
+        g_saPortal[3] = g_saCameraSnapshot.portalPlacement[3];
+        UpdateCalibrationEdits();
+    }
     PortalVClient::Snapshot liveV{};
     const bool vReady = g_vClient.Read(liveV) && liveV.cameraValid;
     if (vReady) {
         g_vSnapshot = liveV;
         g_vConnected = true;
+        if (liveV.portalVisible != g_showVPortal) g_vClient.SetPortalVisible(g_showVPortal);
     }
+    const float zero[3]{};
+    if (g_saToVCameraEnabled && g_saCameraConnected &&
+        g_saCameraSnapshot.cameraValid && vReady && liveV.portalPlaneValid) {
+        Vec3f saRight{},saPortalForward{},saUp{};
+        Vec3f vRight{},vPortalForward{},vUp{};
+        PortalBasis(g_saPortal[3],saRight,saPortalForward,saUp);
+        PortalBasis(liveV.portalPlaneYawDegrees,vRight,vPortalForward,vUp);
+        const Vec3f saLook=Unit({g_saCameraSnapshot.cameraForward[0],
+                                g_saCameraSnapshot.cameraForward[1],
+                                g_saCameraSnapshot.cameraForward[2]});
+        const Vec3f vLook=Unit(MapBasisVector(saLook,saRight,saPortalForward,saUp,
+                                               vRight,vPortalForward,vUp));
+        constexpr float radiansToDegrees=57.295779513082320876f;
+        const float rotation[3]{
+            std::asin(std::clamp(vLook.z,-1.0f,1.0f))*radiansToDegrees,
+            0.0f,
+            std::atan2(-vLook.x,vLook.y)*radiansToDegrees};
+        const float position[3]{
+            liveV.portalPlaneCenter[0],liveV.portalPlaneCenter[1],
+            liveV.portalPlaneCenter[2]+portal_visual::kGtaVPortalCameraHeightOffset};
+        const float horizontalFov=std::clamp(g_saCameraSnapshot.cameraFovDegrees,5.0f,170.0f);
+        const float horizontalRadians=horizontalFov/radiansToDegrees;
+        const float verticalFov=2.0f*std::atan(std::tan(horizontalRadians*0.5f)/(16.0f/9.0f)) *
+                                radiansToDegrees;
+        g_vClient.PublishCamera(true,position,rotation,verticalFov);
+    } else if (vReady) {
+        g_vClient.PublishCamera(false,zero,zero,70.0f);
+    }
+
     if (!g_portalCameraEnabled || !vReady || !liveV.portalPlaneValid) {
         if (g_saCameraConnected) {
-            const float zero[3]{};
-            g_portalCameraClient.Publish(false, zero, zero, zero, 70.0f);
+            g_portalCameraClient.Publish(false, g_showSaPortal, zero, zero, zero, 70.0f);
         }
         return;
     }
 
-    const Vec3f vCenter{liveV.portalPlaneCenter[0], liveV.portalPlaneCenter[1],
-                        liveV.portalPlaneCenter[2]};
     const float vYaw = liveV.portalPlaneYawDegrees;
     Vec3f vRight{}, vForward{}, vUp{};
     Vec3f saRight{}, saForward{}, saUp{};
     PortalBasis(vYaw, vRight, vForward, vUp);
-    PortalBasis(g_saPortal[3], saRight, saForward, saUp);
+    PortalBasis(g_saPortal[3],saRight,saForward,saUp);
 
-    const Vec3f vCamera{liveV.renderedCameraPosition[0], liveV.renderedCameraPosition[1],
-                        liveV.renderedCameraPosition[2]};
-    const Vec3f offset{vCamera.x - vCenter.x, vCamera.y - vCenter.y, vCamera.z - vCenter.z};
     const Vec3f saCenter{g_saPortal[0], g_saPortal[1], g_saPortal[2]};
-    const Vec3f mappedOffset = MapBasisVector(offset, vRight, vForward, vUp,
-                                               saRight, saForward, saUp);
-    const Vec3f targetPosition = Add(saCenter, mappedOffset);
+    // The SA portal camera is a fixed viewpoint at the circle center. GTA V
+    // translation never moves it; only final rendered look direction/FOV map across.
+    const Vec3f targetPosition=saCenter;
 
     const float yaw = liveV.renderedCameraRotation[2] * 0.01745329251994329577f;
     const float pitch = liveV.renderedCameraRotation[0] * 0.01745329251994329577f;
@@ -403,7 +449,8 @@ void UpdatePortalCamera() {
     const float position[3]{targetPosition.x, targetPosition.y, targetPosition.z};
     const float forward[3]{targetForward.x, targetForward.y, targetForward.z};
     const float up[3]{targetUp.x, targetUp.y, targetUp.z};
-    g_portalCameraClient.Publish(true, position, forward, up, liveV.renderedFovDegrees);
+    g_portalCameraClient.Publish(
+        true, g_showSaPortal, position, forward, up, liveV.renderedFovDegrees);
 }
 
 void Refresh() {
@@ -430,7 +477,6 @@ void Refresh() {
     const bool sourceReady = fs::exists(g_sourceAsi);
     const bool deployed = fs::exists(g_deployedAsi);
     const bool matching = sourceReady && deployed && SameFile(g_sourceAsi, g_deployedAsi);
-    const bool logReady = fs::exists(g_log);
     const std::string logBytes = ReadTailBytes(g_log);
 
     std::wostringstream saStatus;
@@ -444,7 +490,7 @@ void Refresh() {
            << L"注入日志：" << (logBytes.find("PortalSA loaded") != std::string::npos ? L"✓ 已加载" : L"等待")
            << L"    渲染 Hook：" << (logBytes.find("Render output hook installed") != std::string::npos ? L"✓ 已安装" : L"等待")
            << L"    状态流：" << (logBytes.find("state tick_ms=") != std::string::npos ? L"✓ 有数据" : L"等待")
-           << L"    GPU 画面：" << (g_captureEnabled ? g_capture.Status() : L"已关闭") << L"\r\n"
+           << L"    SA → V 传输：" << g_capture.Status() << L"\r\n"
            << L"捕获帧数：" << g_capture.Frames()
            << L"    捕获速度：" << std::fixed << std::setprecision(1) << g_captureFps << L" FPS"
            << L"    画面：" << g_capture.Width() << L" × " << g_capture.Height() << L"\r\n"
@@ -454,10 +500,10 @@ void Refresh() {
            << L" / 覆盖旧帧 " << g_capture.OverwrittenFrames()
            << L" / 跳过 " << g_capture.PublishDrops() << L"\r\n"
            << L"Portal 相机控制：" << (g_saCameraConnected ? L"已连接" : L"等待 SA")
-           << L" / " << (g_saCameraSnapshot.overrideActive ? L"正在接管" : L"未接管")
-           << L"；SA 前台 F8 写入精确位置标记\r\n"
-           << g_vCapture.SaConsumerStatus() << L"；SA 前台按 F9 放置世界矩形\r\n"
-           << L"实验性 D3D9Ex 设备替换：" << (g_exDiagnostic ? L"已启用；重启 SA 后生效" : L"关闭（推荐）");
+           << L" / " << (g_saCameraSnapshot.overrideActive ? L"SA 主相机同步中" : L"目标未启用")
+           << L"；V 门 " << (g_showVPortal ? L"显示" : L"隐藏")
+           << L" / SA 门 " << (g_showSaPortal ? L"显示" : L"隐藏") << L"\r\n"
+           << g_vCapture.SaConsumerStatus() << L"；SA 前台按 F9 放置圆形传送门";
     UpdateText(g_saStatus, g_saStatusText, saStatus.str(), false);
 
     std::wostringstream vStatus;
@@ -480,6 +526,9 @@ void Refresh() {
                 << g_vSnapshot.renderedCameraPosition[1] << L", "
                 << g_vSnapshot.renderedCameraPosition[2] << L") FOV "
                 << g_vSnapshot.renderedFovDegrees << L"\r\n";
+        vStatus << L"SA → V 相机："
+                << (g_vSnapshot.cameraOverrideActive ? L"正在控制" : L"未启用")
+                << L"\r\n";
         if (g_vSnapshot.portalPlaneValid) {
             vStatus << L"V 门锚点：("
                     << g_vSnapshot.portalPlaneCenter[0] << L", "
@@ -503,15 +552,13 @@ void Refresh() {
            << L"开发 TP：" << teleportStatus << L"\r\n"
            << L"SA 矩形：" << (fs::exists(g_gtaV / L"reshade-shaders" / L"Shaders" / L"PortalSA.fx") ? L"着色器已部署" : L"着色器未部署")
            << L"；ReShade：" << (fs::exists(g_gtaV / L"ReShade64.asi") || fs::exists(g_gtaV / L"dxgi.dll") ? L"检测到运行库" : L"未检测到运行库")
-           << L"；按 F9 重设位置\r\n"
-           << L"V 窗口生产者：" << (g_vCaptureEnabled ? g_vCapture.Status() : L"已关闭")
+            << L"；F9 从 TP 重设，ReShade 中实时微调并 Lock In\r\n"
+           << L"V → SA 传输：" << g_vCapture.Status()
            << L"    " << g_vCapture.Width() << L" × " << g_vCapture.Height()
            << L"    " << std::fixed << std::setprecision(1) << g_vCaptureFps << L" FPS\r\n"
            << L"仅停用 PortalV.asi 不会移除 Script Hook V 或 ReShade，不能用于切换 Online。";
     UpdateText(g_vStatus, g_vStatusText, vStatus.str(), false);
 
-    const std::wstring wideLog = logReady ? Widen(logBytes) : L"portal.log 尚未生成。部署 ASI 并手动启动 dev 游戏后，此处会自动刷新。";
-    UpdateText(g_logView, g_logText, wideLog, true);
 }
 
 bool Deploy() {
@@ -571,6 +618,20 @@ void DeployV() {
         return;
     }
     Refresh();
+}
+
+void HotReloadVFx(){
+    if(!g_gtaVValid||!IsVRunning()){
+        ShowError(L"V 尚未运行",L"请先进入已部署新版 PortalV.asi 的 GTA V Story Mode。");return;
+    }
+    const fs::path source=g_repo/L"src"/L"PortalV"/L"shaders"/L"PortalSA.fx";
+    const fs::path target=g_gtaV/L"reshade-shaders"/L"Shaders"/L"PortalSA.fx";
+    if(!fs::exists(source)||!CopyFileW(source.c_str(),target.c_str(),FALSE)){
+        ShowError(L"FX 热更新失败",WinError());return;
+    }
+    if(!g_vClient.RequestFxReload()){
+        ShowError(L"V 插件版本过旧",L"请关闭 GTA V，部署一次新版 PortalV.asi；以后改 FX 就不必重启。");return;
+    }
 }
 
 void DisableV() {
@@ -691,31 +752,23 @@ void Layout(HWND window) {
     const int clientWidth = client.right - client.left;
     const int clientHeight = client.bottom - client.top;
     const int contentWidth = clientWidth - padding * 2;
-    const int previewHeight = contentWidth * 9 / 16;
     const int headingHeight = 24;
-    const int statusHeight = 250;
+    const int statusHeight = 165;
     int y = padding;
-    const int commonY = y; y += buttonHeight + gap * 2;
+    const int commonY = y; y += buttonHeight + gap;
     const int saHeadingY = y; y += headingHeight + 4;
     const int saActionsY = y; y += buttonHeight + gap;
-    const int saToolsY = y; y += buttonHeight + gap;
-    const int saDiagnosticY = y; y += buttonHeight + gap;
     const int saStatusY = y; y += statusHeight + gap;
-    const int saPreviewHeadingY = y; y += headingHeight + 4;
-    const int saPreviewY = y; y += previewHeight + gap * 2;
     const int vHeadingY = y; y += headingHeight + 4;
     const int vSafetyY = y; y += 36 + gap;
     const int vActionsY = y; y += buttonHeight + gap;
-    const int vToolsY = y; y += buttonHeight + gap;
     const int calibrationLabelY = y; y += headingHeight + 4;
     const int calibrationEditY = y; y += buttonHeight + gap;
     const int calibrationActionY = y; y += buttonHeight + gap;
+    const int reverseCameraY = y; y += buttonHeight + gap;
+    const int portalVisibilityY = y; y += buttonHeight + gap;
     const int vStatusY = y; y += statusHeight + gap;
-    const int vPreviewHeadingY = y; y += headingHeight + 4;
-    const int vPreviewY = y; y += previewHeight + gap * 2;
-    const int logHeadingY = y; y += headingHeight + 4;
-    const int logY = y; y += 200 + padding;
-    const int contentHeight = y;
+    const int contentHeight = y + padding;
     g_scrollY = std::clamp(g_scrollY, 0, std::max(0, contentHeight - clientHeight));
     SCROLLINFO scroll{sizeof(scroll), SIF_RANGE | SIF_PAGE | SIF_POS};
     scroll.nMax = contentHeight - 1;
@@ -730,32 +783,22 @@ void Layout(HWND window) {
         place(GetDlgItem(window, id), x, top, width, buttonHeight);
     };
     button(kBuild, padding, commonY, 96);
-    button(kRefresh, padding + 96 + gap, commonY, 76);
 
     place(g_saHeading, padding, saHeadingY, contentWidth, headingHeight);
     int x = padding;
-    for (const auto [id, width] : std::array<std::pair<int, int>, 4>{{
-             {kSelectSa, 160}, {kDeploy, 86}, {kDeployLaunch, 146}, {kLaunch, 118}}}) {
+    for (const auto [id, width] : std::array<std::pair<int, int>, 3>{{
+             {kSelectSa, 160}, {kDeploy, 100}, {kOpenLog, 110}}}) {
         button(id, x, saActionsY, width); x += width + gap;
     }
-    button(kDisable, padding, saToolsY, 86);
-    button(kOpenLog, padding + 86 + gap, saToolsY, 86);
-    place(g_gpuMode, padding + 86 + gap + 86 + gap, saToolsY, 300, buttonHeight);
-    place(g_exMode, padding, saDiagnosticY, contentWidth, buttonHeight);
     place(g_saStatus, padding, saStatusY, contentWidth, statusHeight);
-    place(g_saPreviewHeading, padding, saPreviewHeadingY, contentWidth, headingHeight);
-    place(g_preview, padding, saPreviewY, contentWidth, previewHeight);
 
     place(g_vHeading, padding, vHeadingY, contentWidth, headingHeight);
     place(g_vSafety, padding, vSafetyY, contentWidth, 36);
     button(kSelectGtaV, padding, vActionsY, 190);
     button(kDeployV, padding + 190 + gap, vActionsY, 116);
-    button(kDisableV, padding + 190 + gap + 116 + gap, vActionsY, 150);
-    button(kOverlayV, padding, vToolsY, 150);
-    button(kOpenVLog, padding + 150 + gap, vToolsY, 110);
-    button(kTeleportV, padding + 150 + gap + 110 + gap, vToolsY, 170);
-    place(g_vGpuMode, padding + 150 + gap + 110 + gap + 170 + gap, vToolsY,
-          std::max(80, contentWidth - (150 + gap + 110 + gap + 170 + gap)), buttonHeight);
+    button(kOpenVLog, padding + 190 + gap + 116 + gap, vActionsY, 110);
+    button(kTeleportV, padding + 190 + gap + 116 + gap + 110 + gap, vActionsY, 170);
+    button(kHotReloadVFx,padding+190+gap+116+gap+110+gap+170+gap,vActionsY,110);
     place(g_calibrationLabel, padding, calibrationLabelY, contentWidth, headingHeight);
     const int calibrationEditWidth = (contentWidth - gap * 3) / 4;
     for (int index = 0; index < 4; ++index) {
@@ -765,12 +808,10 @@ void Layout(HWND window) {
     place(g_portalCameraMode, padding, calibrationActionY, 260, buttonHeight);
     button(kCaptureSaAnchor, padding + 260 + gap, calibrationActionY, 180);
     button(kSaveCalibration, padding + 260 + gap + 180 + gap, calibrationActionY, 160);
+    place(g_saToVCameraMode, padding, reverseCameraY, 260, buttonHeight);
+    place(g_showVPortalMode, padding, portalVisibilityY, 250, buttonHeight);
+    place(g_showSaPortalMode, padding + 250 + gap, portalVisibilityY, 250, buttonHeight);
     place(g_vStatus, padding, vStatusY, contentWidth, statusHeight);
-    place(g_vPreviewHeading, padding, vPreviewHeadingY, contentWidth, headingHeight);
-    place(g_vPreview, padding, vPreviewY, contentWidth, previewHeight);
-
-    place(g_logHeading, padding, logHeadingY, contentWidth, headingHeight);
-    place(g_logView, padding, logY, contentWidth, 200);
 }
 
 HWND AddButton(HWND parent, int id, const wchar_t* text) {
@@ -794,18 +835,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_CREATE:
         AddButton(window, kBuild, L"重新构建");
         AddButton(window, kDeploy, L"部署 ASI");
-        AddButton(window, kLaunch, L"打开游戏目录");
-        AddButton(window, kDeployLaunch, L"部署并打开目录");
-        AddButton(window, kDisable, L"停用 ASI");
-        AddButton(window, kRefresh, L"刷新");
         AddButton(window, kOpenLog, L"打开日志");
         AddButton(window, kSelectSa, L"选择 SA 目录…");
         AddButton(window, kSelectGtaV, L"选择 GTA V 目录…");
         AddButton(window, kDeployV, L"部署 V + FX");
-        AddButton(window, kDisableV, L"仅停用 V 插件");
-        AddButton(window, kOverlayV, L"切换测试 HUD");
         AddButton(window, kOpenVLog, L"打开 V 日志");
         AddButton(window, kTeleportV, L"TP 到 V 葛洛夫街");
+        AddButton(window,kHotReloadVFx,L"热更新 FX");
         AddButton(window, kCaptureSaAnchor, L"取当前 SA 人物位置");
         AddButton(window, kSaveCalibration, L"保存 SA 出口参数");
         g_saHeading = AddHeading(window, L"GTA San Andreas · 开发副本");
@@ -814,11 +850,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                    L"仅停用 V 插件不会清理 Script Hook V / ReShade；勿用此目录进入 Online。",
                                    WS_CHILD | WS_VISIBLE, 0, 0, 1, 1, window, nullptr, g_instance, nullptr);
         SendMessageW(g_vSafety, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
-        g_saPreviewHeading = AddHeading(window, L"SA 实时画面");
-        g_vPreviewHeading = AddHeading(window, L"GTA V 实时画面");
-        g_logHeading = AddHeading(window, L"SA 插件日志");
         g_calibrationLabel = CreateWindowExW(0, L"STATIC",
-            L"Portal Camera 校准 · SA 出口 X / Y / Z / Yaw°（当前版本使用 SA 固定主相机）",
+            L"Portal Camera 校准 · SA 出口 X / Y / Z / Yaw°（SA 主相机，WGC 实时预览）",
             WS_CHILD | WS_VISIBLE, 0, 0, 1, 1, window, nullptr, g_instance, nullptr);
         SendMessageW(g_calibrationLabel, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         for (int index = 0; index < 4; ++index) {
@@ -837,27 +870,26 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPortalCamera)),
             g_instance, nullptr);
         SendMessageW(g_portalCameraMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
-        g_gpuMode = CreateWindowExW(0, L"BUTTON", L"GPU 窗口捕获（运行中可切换）",
-                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                    0, 0, 1, 1, window,
-                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kGpuMode)),
-                                    g_instance, nullptr);
-        SendMessageW(g_gpuMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
-        SendMessageW(g_gpuMode, BM_SETCHECK, g_captureEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
-        g_exMode = CreateWindowExW(0, L"BUTTON", L"实验性 D3D9Ex 设备替换（不推荐）",
-                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                    0, 0, 1, 1, window,
-                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kExDiagnostic)),
-                                    g_instance, nullptr);
-        SendMessageW(g_exMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
-        SendMessageW(g_exMode, BM_SETCHECK, g_exDiagnostic ? BST_CHECKED : BST_UNCHECKED, 0);
-        g_vGpuMode = CreateWindowExW(0, L"BUTTON", L"V GPU 窗口生产者（可切换）",
-                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                     0, 0, 1, 1, window,
-                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kVCaptureMode)),
-                                     g_instance, nullptr);
-        SendMessageW(g_vGpuMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
-        SendMessageW(g_vGpuMode, BM_SETCHECK, g_vCaptureEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+        g_saToVCameraMode = CreateWindowExW(0, L"BUTTON", L"启用 SA → V Portal 相机",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 1, 1, window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSaToVCamera)),
+            g_instance, nullptr);
+        SendMessageW(g_saToVCameraMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        g_showVPortalMode = CreateWindowExW(0, L"BUTTON", L"显示 GTA V 中的 SA 门",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 1, 1, window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kShowVPortal)),
+            g_instance, nullptr);
+        SendMessageW(g_showVPortalMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        SendMessageW(g_showVPortalMode, BM_SETCHECK, BST_CHECKED, 0);
+        g_showSaPortalMode = CreateWindowExW(0, L"BUTTON", L"显示 SA 中的 GTA V 门",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 1, 1, window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kShowSaPortal)),
+            g_instance, nullptr);
+        SendMessageW(g_showSaPortalMode, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
+        SendMessageW(g_showSaPortalMode, BM_SETCHECK, BST_UNCHECKED, 0);
         g_saStatus = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                      WS_CHILD | WS_VISIBLE | WS_VSCROLL |
                                          ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
@@ -866,19 +898,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                     WS_CHILD | WS_VISIBLE | WS_VSCROLL |
                                         ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                                     0, 0, 1, 1, window, nullptr, g_instance, nullptr);
-        g_logView = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                                    WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL |
-                                        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
-                                    0, 0, 1, 1, window, nullptr, g_instance, nullptr);
-        g_preview = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"等待共享画面",
-                                    WS_CHILD | WS_VISIBLE, 0, 0, 640, 360,
-                                    window, nullptr, g_instance, nullptr);
-        g_vPreview = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"等待 GTA V 窗口画面",
-                                     WS_CHILD | WS_VISIBLE, 0, 0, 640, 360,
-                                     window, nullptr, g_instance, nullptr);
         SendMessageW(g_saStatus, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
         SendMessageW(g_vStatus, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
-        SendMessageW(g_logView, WM_SETFONT, reinterpret_cast<WPARAM>(g_monoFont), TRUE);
         SetTimer(window, kRefreshTimer, 1000, nullptr);
         SetTimer(window, kFrameTimer, 15, nullptr);
         Refresh();
@@ -887,7 +908,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         Layout(window);
         return 0;
     case WM_GETMINMAXINFO:
-        reinterpret_cast<MINMAXINFO*>(lParam)->ptMinTrackSize = {620, 500};
+        reinterpret_cast<MINMAXINFO*>(lParam)->ptMinTrackSize = {760, 650};
         return 0;
     case WM_VSCROLL: {
         if (lParam) return 0;
@@ -916,27 +937,17 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             UpdatePortalCamera();
             CaptureGameFrame();
             CaptureVFrame();
-            portal_dev::legacy::sa_gpu_preview::Pump(g_frames, g_preview);
         }
         return 0;
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case kBuild: StartBuild(); break;
         case kDeploy: Deploy(); break;
-        case kLaunch: OpenPath(g_dev, L"dev 游戏目录不存在。"); break;
-        case kDeployLaunch: if (Deploy()) OpenPath(g_dev, L"dev 游戏目录不存在。"); break;
-        case kDisable: DisableAsi(); break;
-        case kRefresh: Refresh(); break;
         case kOpenLog: OpenPath(g_log, L"portal.log 尚未生成。"); break;
         case kSelectSa: SelectSaDirectory(); break;
         case kSelectGtaV: SelectGtaVDirectory(); break;
         case kDeployV: DeployV(); break;
-        case kDisableV: DisableV(); break;
-        case kOverlayV:
-            if (!g_vConnected || !g_vClient.SetOverlayEnabled(!g_vSnapshot.overlayEnabled))
-                ShowError(L"V 尚未连接", L"请先启动已部署 PortalV.asi 的 GTA V Enhanced 故事模式。");
-            Refresh();
-            break;
+        case kHotReloadVFx: HotReloadVFx(); break;
         case kOpenVLog: OpenPath(g_gtaV / L"PortalV.log", L"PortalV.log 尚未生成。"); break;
         case kTeleportV: {
             // User-confirmed GTA V Grove Street development spawn, separate from F9's portal plane.
@@ -958,6 +969,33 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 SendMessageW(g_portalCameraMode, BM_SETCHECK, BST_UNCHECKED, 0);
                 ShowError(L"SA 出口参数无效", L"请为 X、Y、Z 和 Yaw 输入有限数字。");
             }
+            if(g_portalCameraEnabled){
+                g_saToVCameraEnabled=false;
+                SendMessageW(g_saToVCameraMode,BM_SETCHECK,BST_UNCHECKED,0);
+                const float zero[3]{};g_vClient.PublishCamera(false,zero,zero,70.0f);
+            }
+            UpdatePortalCamera();
+            Refresh();
+            break;
+        case kSaToVCamera:
+            g_saToVCameraEnabled=
+                SendMessageW(g_saToVCameraMode,BM_GETCHECK,0,0)==BST_CHECKED;
+            if(g_saToVCameraEnabled){
+                g_portalCameraEnabled=false;
+                SendMessageW(g_portalCameraMode,BM_SETCHECK,BST_UNCHECKED,0);
+            }
+            UpdatePortalCamera();
+            Refresh();
+            break;
+        case kShowVPortal:
+            g_showVPortal =
+                SendMessageW(g_showVPortalMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g_vClient.SetPortalVisible(g_showVPortal);
+            Refresh();
+            break;
+        case kShowSaPortal:
+            g_showSaPortal =
+                SendMessageW(g_showSaPortalMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
             UpdatePortalCamera();
             Refresh();
             break;
@@ -969,7 +1007,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             }
             g_saPortal[0] = g_saCameraSnapshot.playerPosition[0];
             g_saPortal[1] = g_saCameraSnapshot.playerPosition[1];
-            g_saPortal[2] = g_saCameraSnapshot.playerPosition[2] + 1.0f;
+            g_saPortal[2] = g_saCameraSnapshot.playerPosition[2] +
+                portal_visual::kCenterAboveGround;
             UpdateCalibrationEdits();
             break;
         case kSaveCalibration:
@@ -977,20 +1016,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 ShowError(L"保存失败", L"请检查四个数字以及 dev 游戏目录的写入权限。");
             }
             break;
-        case kGpuMode:
-            g_captureEnabled = SendMessageW(g_gpuMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            if (!g_captureEnabled) g_capture.Stop();
-            Refresh();
-            break;
-        case kExDiagnostic:
-            g_exDiagnostic = SendMessageW(g_exMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            if (g_frames) InterlockedExchange(&g_frames->bridgeEnabled, g_exDiagnostic ? 3 : 0);
-            Refresh();
-            break;
-        case kVCaptureMode:
-            g_vCaptureEnabled = SendMessageW(g_vGpuMode, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            if (!g_vCaptureEnabled) g_vCapture.Stop();
-            Refresh();
+        case kSaPortalX:
+        case kSaPortalY:
+        case kSaPortalZ:
+        case kSaPortalYaw:
+            if (HIWORD(wParam) == EN_CHANGE && g_portalCameraEnabled && ReadCalibrationEdits())
+                UpdatePortalCamera();
             break;
         default: break;
         }
@@ -1002,11 +1033,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_vCapture.Stop();
         if (g_saCameraConnected) {
             const float zero[3]{};
-            g_portalCameraClient.Publish(false, zero, zero, zero, 70.0f);
+            g_portalCameraClient.Publish(false, g_showSaPortal, zero, zero, zero, 70.0f);
+        }
+        if(g_vConnected){
+            const float zero[3]{};g_vClient.PublishCamera(false,zero,zero,70.0f);
         }
         g_portalCameraClient.Disconnect();
         g_vClient.Disconnect();
-        portal_dev::legacy::sa_gpu_preview::Stop(g_frames);
         if (g_frames) UnmapViewOfFile(g_frames);
         if (g_mapping) CloseHandle(g_mapping);
         if (g_supervisorMutex) {
@@ -1067,8 +1100,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* commandLine, int s
         return 1;
     }
 
-    g_window = CreateWindowExW(0, kWindowClass, L"GTAPortal Dev — GPU Supervisor",
-                               WS_OVERLAPPEDWINDOW | WS_VSCROLL, CW_USEDEFAULT, CW_USEDEFAULT, 980, 860,
+    g_window = CreateWindowExW(0, kWindowClass, L"GTAPortal Dev",
+                               WS_OVERLAPPEDWINDOW | WS_VSCROLL, CW_USEDEFAULT, CW_USEDEFAULT, 900, 760,
                                nullptr, nullptr, instance, nullptr);
     if (!g_window) {
         return 1;

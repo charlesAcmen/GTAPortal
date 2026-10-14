@@ -87,9 +87,13 @@ bool PortalVClient::Read(Snapshot& snapshot) {
         snapshot.portalPlaneValid = portalPlaneValid;
         snapshot.cameraValid = valid;
         snapshot.overlayEnabled = InterlockedCompareExchange(&state->overlayEnabled, 0, 0) != 0;
+        snapshot.portalVisible = InterlockedCompareExchange(&state->portalVisible, 0, 0) != 0;
         snapshot.teleportResult = InterlockedCompareExchange(&state->teleportResult, 0, 0);
         snapshot.teleportAppliedRequest =
             InterlockedCompareExchange(&state->teleportAppliedRequest, 0, 0);
+        snapshot.reloadFxApplied=InterlockedCompareExchange(&state->reloadFxApplied,0,0);
+        snapshot.cameraOverrideActive=
+            InterlockedCompareExchange(&state->cameraOverrideActive,0,0)!=0;
         return true;
     }
     return false;
@@ -102,6 +106,13 @@ bool PortalVClient::SetOverlayEnabled(bool enabled) {
     return true;
 }
 
+bool PortalVClient::SetPortalVisible(bool visible) {
+    Snapshot snapshot;
+    if (!Read(snapshot)) return false;
+    InterlockedExchange(&view_->state->portalVisible, visible ? 1 : 0);
+    return true;
+}
+
 bool PortalVClient::RequestTeleport(const float (&position)[3], float headingDegrees) {
     Snapshot snapshot;
     if (!Read(snapshot)) return false;
@@ -111,4 +122,21 @@ bool PortalVClient::RequestTeleport(const float (&position)[3], float headingDeg
     InterlockedExchange(&view_->state->teleportResult, portal_v::kTeleportPending);
     InterlockedIncrement(&view_->state->teleportRequest);
     return true;
+}
+
+bool PortalVClient::RequestFxReload(){
+    Snapshot snapshot;if(!Read(snapshot))return false;
+    InterlockedIncrement(&view_->state->reloadFxRequest);return true;
+}
+
+bool PortalVClient::PublishCamera(bool enabled,const float (&position)[3],
+                                  const float (&rotation)[3],float fovDegrees){
+    Snapshot snapshot;if(!Read(snapshot))return false;auto* state=view_->state;
+    InterlockedIncrement(&state->cameraCommandSequence);
+    state->cameraCommandFlags=enabled?portal_v::kCameraCommandEnabled:0;
+    state->cameraCommandHeartbeatTickMs=GetTickCount64();
+    std::memcpy(state->targetCameraPosition,position,sizeof(position));
+    std::memcpy(state->targetCameraRotation,rotation,sizeof(rotation));
+    state->targetCameraFovDegrees=fovDegrees;
+    MemoryBarrier();InterlockedIncrement(&state->cameraCommandSequence);return true;
 }

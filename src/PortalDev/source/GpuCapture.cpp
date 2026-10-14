@@ -287,7 +287,7 @@ bool GpuCapture::Pump() {
         height_ = description.Height;
         ++frames_;
         status_ = impl_->publication == Publication::Sa
-            ? impl_->publisher.Status() + L"；" + impl_->cropStatus
+            ? impl_->publisher.Status() + L"；WGC 主相机；" + impl_->cropStatus
             : impl_->cropStatus;
         return true;
     } catch (const winrt::hresult_error& error) {

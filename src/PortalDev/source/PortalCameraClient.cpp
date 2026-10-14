@@ -54,15 +54,23 @@ bool PortalCameraClient::Read(Snapshot& snapshot) {
         if (before & 1) continue;
         const DWORD processId = state->ownerPid;
         const uint64_t heartbeat = state->statusHeartbeatTickMs;
-        float player[3]{}, camera[3]{}, forward[3]{}, up[3]{};
+        float player[3]{}, camera[3]{}, forward[3]{}, up[3]{}, placement[4]{};
         std::memcpy(player, state->playerPosition, sizeof(player));
         std::memcpy(camera, state->cameraPosition, sizeof(camera));
         std::memcpy(forward, state->cameraForward, sizeof(forward));
         std::memcpy(up, state->cameraUp, sizeof(up));
+        const float cameraFov=state->cameraFovDegrees;
+        const LONG placementSequence =
+            InterlockedCompareExchange(&state->portalPlacementSequence, 0, 0);
+        if (!(placementSequence & 1))
+            std::memcpy(placement, state->portalPlacement, sizeof(placement));
         const bool playerValid = state->playerValid != 0;
         const bool cameraValid = state->cameraValid != 0;
         MemoryBarrier();
-        if (before != InterlockedCompareExchange(&state->statusSequence, 0, 0)) continue;
+        const LONG placementAfter =
+            InterlockedCompareExchange(&state->portalPlacementSequence, 0, 0);
+        if (before != InterlockedCompareExchange(&state->statusSequence, 0, 0) ||
+            placementSequence != placementAfter) continue;
         const uint64_t now = GetTickCount64();
         if (!heartbeat || now < heartbeat || now - heartbeat > 3000) return false;
         snapshot.processId = processId;
@@ -71,21 +79,26 @@ bool PortalCameraClient::Read(Snapshot& snapshot) {
         std::memcpy(snapshot.cameraPosition, camera, sizeof(camera));
         std::memcpy(snapshot.cameraForward, forward, sizeof(forward));
         std::memcpy(snapshot.cameraUp, up, sizeof(up));
+        snapshot.cameraFovDegrees=cameraFov;
         snapshot.playerValid = playerValid;
         snapshot.cameraValid = cameraValid;
         snapshot.overrideActive = InterlockedCompareExchange(&state->overrideActive, 0, 0) != 0;
+        snapshot.portalPlacementSequence =
+            (placementSequence & 1) ? 0u : static_cast<uint32_t>(placementSequence);
+        std::memcpy(snapshot.portalPlacement, placement, sizeof(placement));
         return true;
     }
     return false;
 }
 
-bool PortalCameraClient::Publish(bool enabled, const float (&position)[3],
+bool PortalCameraClient::Publish(bool enabled, bool showSaPortal, const float (&position)[3],
                                  const float (&forward)[3], const float (&up)[3],
                                  float fovDegrees) {
     if (!Connect()) return false;
     auto* state = view_->state;
     InterlockedIncrement(&state->commandSequence);
-    state->commandFlags = enabled ? portal_camera::kCommandEnabled : 0;
+    state->commandFlags = (enabled ? portal_camera::kCommandEnabled : 0) |
+        (showSaPortal ? portal_camera::kCommandShowSaPortal : 0);
     state->commandHeartbeatTickMs = GetTickCount64();
     std::memcpy(state->targetPosition, position, sizeof(position));
     std::memcpy(state->targetForward, forward, sizeof(forward));

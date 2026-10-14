@@ -52,6 +52,7 @@
     <ClCompile Include="source\PortalVClient.cpp" />
     <ClCompile Include="source\PortalCameraClient.cpp" />
     <ClCompile Include="source\SAFramePublisher.cpp" />
+    <ClCompile Include="source\SAOffscreenConsumer.cpp" />
     <ClCompile Include="source\VToSAPublisher.cpp" />
     <ClCompile Include="source\legacy\diagnostics\SaGpuPreview.cpp" />
   </ItemGroup>
