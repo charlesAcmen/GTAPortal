@@ -7,7 +7,8 @@ namespace portal_v {
 
 constexpr wchar_t kMappingName[] = L"Local\\GTAPortal.VState.v3";
 constexpr uint32_t kMagic = 0x31565447; // GTV1
-constexpr uint32_t kVersion = 3;
+constexpr uint32_t kVersion = 6;
+constexpr uint32_t kCameraCommandEnabled=1u<<0;
 
 enum TeleportResult : LONG {
     kTeleportIdle = 0,
@@ -44,8 +45,19 @@ struct SharedState {
     float portalPlaneCenter[3];
     float portalPlaneYawDegrees;
     uint32_t portalPlaneValid;
+    volatile LONG portalVisible;
+    volatile LONG reloadFxRequest;
+    volatile LONG reloadFxApplied;
+    volatile LONG cameraCommandSequence;
+    uint32_t cameraCommandFlags;
+    uint64_t cameraCommandHeartbeatTickMs;
+    float targetCameraPosition[3];
+    float targetCameraRotation[3];
+    float targetCameraFovDegrees;
+    volatile LONG appliedCameraCommandSequence;
+    volatile LONG cameraOverrideActive;
 };
 
-static_assert(sizeof(SharedState) == 152);
+static_assert(sizeof(SharedState) == 216);
 
 } // namespace portal_v
