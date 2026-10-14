@@ -12,6 +12,7 @@
 #include "CameraOverride.h"
 #include "DevTeleport.h"
 #include "VConsumer.h"
+#include "PortalOverlay.h"
 #include "legacy/diagnostics/D3D9ExBridge.h"
 #include "legacy/diagnostics/SaGpuProducer.h"
 
@@ -78,19 +79,29 @@ void OnGameProcess() {
 void OnRenderScene() {
     if (!g_supported) return;
     portal_sa::state::OnRenderScene();
-    portal_sa::v_consumer::OnRenderScene(static_cast<IDirect3DDevice9*>(GetD3DDevice()),
-        [](const char* message) { Log(message); });
+}
+
+void OnShutdownRw() {
+    portal_sa::camera_override::Shutdown();
+    portal_sa::portal_overlay::Shutdown();
 }
 
 HRESULT STDMETHODCALLTYPE OnReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
     portal_sa::v_consumer::BeforeReset();
+    portal_sa::portal_overlay::BeforeReset();
     portal_sa::legacy::sa_gpu_producer::BeforeReset(device);
-    return g_resetHook.stdcall<HRESULT>(device, params);
+    const HRESULT result=g_resetHook.stdcall<HRESULT>(device, params);
+    if(SUCCEEDED(result))portal_sa::portal_overlay::AfterReset();
+    return result;
 }
 
 RwCamera* __cdecl OnShowRaster(RwCamera* camera, void* window, RwUInt32 flags) {
+    auto* device=static_cast<IDirect3DDevice9*>(GetD3DDevice());
+    // Composite after SA's world, glare and color passes but immediately before Present.
+    portal_sa::v_consumer::OnRenderScene(device,[](const char* message){Log(message);});
+    portal_sa::portal_overlay::Render(device);
     portal_sa::legacy::sa_gpu_producer::BeforeShowRaster(
-        static_cast<IDirect3DDevice9*>(GetD3DDevice()));
+        device);
     RwCamera* result = g_showRasterHook.ccall<RwCamera*>(camera, window, flags);
     portal_sa::legacy::sa_gpu_producer::AfterShowRaster();
     return result;
@@ -130,6 +141,7 @@ struct PortalSA {
         plugin::Events::initRwEvent += OnInitRw;
         plugin::Events::gameProcessEvent += OnGameProcess;
         plugin::Events::renderSceneEvent += OnRenderScene;
+        plugin::Events::shutdownRwEvent += OnShutdownRw;
     }
 } g_portalSA;
 

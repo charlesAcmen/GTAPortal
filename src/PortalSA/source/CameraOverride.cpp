@@ -2,15 +2,18 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <sstream>
 
 #include <CCamera.h>
+#include <CDraw.h>
 #include <CPlayerPed.h>
 #include <common.h>
 
+#include "CameraProjection.h"
 #include "StateCapture.h"
 #include "../../PortalCameraProtocol.h"
 
@@ -21,6 +24,9 @@ HANDLE g_mapping{};
 portal_camera::SharedState* g_shared{};
 bool g_overrideActive{};
 bool g_f8Down{};
+bool g_portalVisible{};
+CPlayerPed* g_hiddenPlayer{};
+bool g_hiddenPlayerWasVisible{};
 
 bool EnsureMapping(void (*log)(const std::string&)) {
     if (g_shared) return true;
@@ -62,6 +68,7 @@ void PublishStatus() {
     copy(g_shared->cameraPosition, state::g_state.cameraPosition);
     copy(g_shared->cameraForward, state::g_state.cameraForward);
     copy(g_shared->cameraUp, state::g_state.cameraUp);
+    g_shared->cameraFovDegrees=state::g_state.fovDegrees;
     MemoryBarrier();
     InterlockedIncrement(&g_shared->statusSequence);
 }
@@ -100,9 +107,12 @@ bool FiniteVector(const float (&value)[3]) {
 void Restore(void (*log)(const std::string&), const char* reason) {
     if (!g_overrideActive) return;
     TheCamera.RestoreWithJumpCut();
+    if (g_hiddenPlayer && FindPlayerPed(0) == g_hiddenPlayer)
+        g_hiddenPlayer->bIsVisible = g_hiddenPlayerWasVisible;
+    g_hiddenPlayer = nullptr;
     g_overrideActive = false;
     InterlockedExchange(&g_shared->overrideActive, 0);
-    log(std::string("Portal camera override restored: ") + reason);
+    log(std::string("Portal main camera restored: ") + reason);
 }
 
 void LogMarker(void (*log)(const std::string&)) {
@@ -131,6 +141,7 @@ void OnGameProcess(void (*log)(const std::string&)) {
 
     Command command{};
     if (!ReadCommand(command)) return;
+    g_portalVisible = (command.flags & portal_camera::kCommandShowSaPortal) != 0;
     const uint64_t now = GetTickCount64();
     const bool fresh = command.heartbeat && now >= command.heartbeat &&
                        now - command.heartbeat <= 500;
@@ -153,18 +164,60 @@ void OnGameProcess(void (*log)(const std::string&)) {
     const CVector upOffset(command.up[0], command.up[1], command.up[2] - 1.0f);
     TheCamera.SetCamPositionForFixedMode(&position, &upOffset);
     TheCamera.TakeControlNoEntity(&target, SWITCHTYPE_JUMPCUT, 1);
-    if (!g_overrideActive) log("Portal camera override active (fixed-mode prototype, FOV 70)");
+
+    // GTA V reports vertical FOV. SA's camera field uses horizontal FOV, so
+    // convert using the same fixed 16:9 portal aspect used by the compositor.
+    const float verticalFov = std::clamp(command.fov, 5.0f, 140.0f);
+    const float horizontalFov = camera_projection::VerticalToHorizontalFovDegrees(verticalFov);
+    TheCamera.m_aCams[TheCamera.m_nActiveCam].m_fFOV = horizontalFov;
+    CDraw::SetFOV(horizontalFov);
+    CPlayerPed* player = FindPlayerPed(0);
+    if (player) {
+        if (g_hiddenPlayer != player) {
+            if (g_hiddenPlayer && FindPlayerPed(0) == g_hiddenPlayer)
+                g_hiddenPlayer->bIsVisible = g_hiddenPlayerWasVisible;
+            g_hiddenPlayer = player;
+            g_hiddenPlayerWasVisible = player->bIsVisible;
+        }
+        player->bIsVisible = false;
+    }
+    if (!g_overrideActive) {
+        std::ostringstream message;
+        message << std::fixed << std::setprecision(2)
+                << "Portal main camera sync active (V render pose, vertical FOV "
+                << verticalFov << " -> SA horizontal FOV " << horizontalFov
+                << ", WGC output)";
+        log(message.str());
+    }
     g_overrideActive = true;
     InterlockedExchange(&g_shared->appliedCommandSequence, command.sequence);
     InterlockedExchange(&g_shared->overrideActive, 1);
 }
 
+void PublishPortalPlacement(float x, float y, float centerZ, float yawDegrees) {
+    if (!g_shared) return;
+    InterlockedIncrement(&g_shared->portalPlacementSequence);
+    g_shared->portalPlacement[0] = x;
+    g_shared->portalPlacement[1] = y;
+    g_shared->portalPlacement[2] = centerZ;
+    g_shared->portalPlacement[3] = yawDegrees;
+    MemoryBarrier();
+    InterlockedIncrement(&g_shared->portalPlacementSequence);
+}
+
+bool PortalVisible() { return g_portalVisible; }
+
 void Shutdown() {
+    if (g_overrideActive) TheCamera.RestoreWithJumpCut();
+    if (g_hiddenPlayer && FindPlayerPed(0) == g_hiddenPlayer)
+        g_hiddenPlayer->bIsVisible = g_hiddenPlayerWasVisible;
+    g_hiddenPlayer = nullptr;
     if (g_shared) UnmapViewOfFile(g_shared);
     if (g_mapping) CloseHandle(g_mapping);
     g_shared = nullptr;
     g_mapping = nullptr;
     g_overrideActive = false;
+    g_portalVisible = false;
 }
 
 } // namespace portal_sa::camera_override

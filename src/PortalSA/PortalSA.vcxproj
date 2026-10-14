@@ -64,7 +64,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <PreprocessorDefinitions>_CRT_NON_CONFORMING_SWPRINTFS;TARGET_NAME=R"($(TargetName))";GTASA;GTAGAME_NAME="San Andreas";GTAGAME_ABBR="SA";GTAGAME_ABBRLOW="sa";GTAGAME_PROTAGONISTNAME="CJ";GTAGAME_CITYNAME="San Andreas";PLUGIN_SGV_10US;RW;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(PLUGIN_SDK_DIR)\plugin_sa;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa\enums;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa\rw;$(PLUGIN_SDK_DIR)\shared;$(PLUGIN_SDK_DIR)\shared\game;$(PLUGIN_SDK_DIR)\safetyhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\third_party\ReShade\deps\imgui;$(PLUGIN_SDK_DIR)\plugin_sa;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa\enums;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa\rw;$(PLUGIN_SDK_DIR)\shared;$(PLUGIN_SDK_DIR)\shared\game;$(PLUGIN_SDK_DIR)\safetyhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>None</DebugInformationFormat>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -95,7 +95,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <PreprocessorDefinitions>DEBUG;_CRT_NON_CONFORMING_SWPRINTFS;TARGET_NAME=R"($(TargetName))";GTASA;GTAGAME_NAME="San Andreas";GTAGAME_ABBR="SA";GTAGAME_ABBRLOW="sa";GTAGAME_PROTAGONISTNAME="CJ";GTAGAME_CITYNAME="San Andreas";PLUGIN_SGV_10US;RW;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(PLUGIN_SDK_DIR)\plugin_sa;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa\enums;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa\rw;$(PLUGIN_SDK_DIR)\shared;$(PLUGIN_SDK_DIR)\shared\game;$(PLUGIN_SDK_DIR)\safetyhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\third_party\ReShade\deps\imgui;$(PLUGIN_SDK_DIR)\plugin_sa;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa\enums;$(PLUGIN_SDK_DIR)\plugin_sa\game_sa\rw;$(PLUGIN_SDK_DIR)\shared;$(PLUGIN_SDK_DIR)\shared\game;$(PLUGIN_SDK_DIR)\safetyhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
       <MinimalRebuild>false</MinimalRebuild>
@@ -121,8 +121,15 @@
     <ClCompile Include="source\CameraOverride.cpp" />
     <ClCompile Include="source\DevTeleport.cpp" />
     <ClCompile Include="source\Main.cpp" />
+    <ClCompile Include="source\PortalOverlay.cpp" />
     <ClCompile Include="source\StateCapture.cpp" />
     <ClCompile Include="source\VConsumer.cpp" />
+    <ClCompile Include="..\..\third_party\ReShade\deps\imgui\imgui.cpp" />
+    <ClCompile Include="..\..\third_party\ReShade\deps\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\..\third_party\ReShade\deps\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\..\third_party\ReShade\deps\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\..\third_party\ReShade\deps\imgui\backends\imgui_impl_dx9.cpp" />
+    <ClCompile Include="..\..\third_party\ReShade\deps\imgui\backends\imgui_impl_win32.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

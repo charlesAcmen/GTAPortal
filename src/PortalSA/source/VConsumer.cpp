@@ -2,11 +2,14 @@
 #include <d3d9.h>
 #include <windows.h>
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include "CameraOverride.h"
 #include "StateCapture.h"
+#include "../../PortalVisualConfig.h"
 #include "../../VToSAFrames.h"
 
 namespace portal_sa::v_consumer { namespace {
@@ -23,11 +26,18 @@ v_to_sa::SharedFrames* g_shared = nullptr;
 void* g_pixels = nullptr;
 std::array<UploadSlot, v_to_sa::kSlotCount> g_uploads{};
 IDirect3DDevice9* g_device = nullptr;
+IDirect3DStateBlock9* g_savedState = nullptr;
 Plane g_plane{};
 wchar_t g_planePath[MAX_PATH]{};
 LONG g_generation = 0;
 int g_active = -1;
 bool g_f9Down = false;
+bool g_followPlayer = false;
+bool g_openOverlayRequested = false;
+bool g_publishedLoadedPlane = false;
+float g_radius = portal_visual::kRadius;
+float g_centerAboveGround = portal_visual::kCenterAboveGround;
+float g_savedYawDegrees = portal_visual::gta_sa::yawDegrees;
 bool g_depthStateLogged = false;
 DWORD g_lastAttachAttempt = 0, g_lastResourceAttempt = 0;
 uint64_t g_lastFrame = 0, g_lastReadyTick = 0;
@@ -38,6 +48,18 @@ Vec3 Cross(Vec3 a,Vec3 b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*
 Vec3 Unit(Vec3 a) { const float l=std::sqrt(a.x*a.x+a.y*a.y+a.z*a.z); return l>0.0001f?Scale(a,1.0f/l):Vec3{}; }
 Vec3 Copy(state::Vec3 a) { return {a.x,a.y,a.z}; }
 
+void SetPlaneFromGround(float x,float y,float z,float yawDegrees) {
+    constexpr float degreesToRadians=0.01745329251994329577f;
+    const float heading=yawDegrees*degreesToRadians;
+    const Vec3 forward=Unit({-std::sin(heading),std::cos(heading),0.0f});
+    const Vec3 worldUp{0.0f,0.0f,1.0f};
+    g_plane.center={x,y,z+g_centerAboveGround};
+    g_plane.right=Unit(Cross(forward,worldUp));
+    g_plane.up=worldUp;
+    g_plane.placed=true;
+    g_savedYawDegrees=yawDegrees;
+}
+
 void PlanePath() {
     if (g_planePath[0]) return;
     const DWORD length=GetModuleFileNameW(nullptr,g_planePath,MAX_PATH);
@@ -46,24 +68,48 @@ void PlanePath() {
     if (!slash) { g_planePath[0]=0; return; }
     wcscpy_s(slash+1,MAX_PATH-(slash+1-g_planePath),L"PortalSAPlane.txt");
 }
+void SavePlane();
 void LoadPlane() {
-    PlanePath(); if (!g_planePath[0]) return; FILE* file=nullptr;
-    if (_wfopen_s(&file,g_planePath,L"r")||!file) return; Plane value{};
-    const int read=::fscanf_s(file,"%f %f %f %f %f %f %f %f %f",
-        &value.center.x,&value.center.y,&value.center.z,&value.right.x,&value.right.y,
-        &value.right.z,&value.up.x,&value.up.y,&value.up.z);
-    std::fclose(file); if(read==9){value.placed=true;g_plane=value;}
+    PlanePath();
+    SetPlaneFromGround(portal_visual::gta_sa::groundX,portal_visual::gta_sa::groundY,
+        portal_visual::gta_sa::groundZ,portal_visual::gta_sa::yawDegrees);
+    if (!g_planePath[0]) return; FILE* file=nullptr;
+    if (_wfopen_s(&file,g_planePath,L"r")||!file){SavePlane();return;}
+    char line[512]{};const bool got=std::fgets(line,sizeof(line),file)!=nullptr;std::fclose(file);
+    if(!got){SavePlane();return;}
+    int version=0;float x=0,y=0,z=0,yaw=0;
+    float radius=portal_visual::kRadius,centerAboveGround=portal_visual::kCenterAboveGround;
+    if(::sscanf_s(line,"%d %f %f %f %f %f %f",&version,&x,&y,&z,&yaw,
+        &radius,&centerAboveGround)==7&&version==3){
+        g_radius=std::clamp(radius,0.25f,20.0f);
+        g_centerAboveGround=std::clamp(centerAboveGround,-20.0f,20.0f);
+        SetPlaneFromGround(x,y,z,yaw);SavePlane();return;
+    }
+    if(::sscanf_s(line,"%d %f %f %f %f",&version,&x,&y,&z,&yaw)==5&&version==2){
+        SetPlaneFromGround(x,y,z,yaw);SavePlane();return;
+    }
+    Plane legacy{};
+    if(::sscanf_s(line,"%f %f %f %f %f %f %f %f %f",
+        &legacy.center.x,&legacy.center.y,&legacy.center.z,&legacy.right.x,&legacy.right.y,
+        &legacy.right.z,&legacy.up.x,&legacy.up.y,&legacy.up.z)==9){
+        const float legacyGroundZ=legacy.center.z-1.10f;
+        const float legacyYaw=std::atan2(legacy.right.y,legacy.right.x)*57.295779513082320876f;
+        SetPlaneFromGround(legacy.center.x,legacy.center.y,legacyGroundZ,legacyYaw);
+        SavePlane();return;
+    }
+    SavePlane();
 }
 void SavePlane() {
     PlanePath(); if(!g_planePath[0])return; FILE* file=nullptr;
     if(_wfopen_s(&file,g_planePath,L"w")||!file)return;
-    std::fprintf(file,"%.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n",
-        g_plane.center.x,g_plane.center.y,g_plane.center.z,g_plane.right.x,g_plane.right.y,
-        g_plane.right.z,g_plane.up.x,g_plane.up.y,g_plane.up.z); std::fclose(file);
+    const float groundZ=g_plane.center.z-g_centerAboveGround;
+    std::fprintf(file,"3 %.6f %.6f %.6f %.6f %.6f %.6f\n",
+        g_plane.center.x,g_plane.center.y,groundZ,g_savedYawDegrees,g_radius,g_centerAboveGround);std::fclose(file);
 }
 bool IsGameForeground(){DWORD pid=0;GetWindowThreadProcessId(GetForegroundWindow(),&pid);return pid==GetCurrentProcessId();}
 
 void ReleaseUploads() {
+    if(g_savedState)g_savedState->Release();g_savedState=nullptr;
     for(auto& slot:g_uploads){if(slot.done)slot.done->Release();if(slot.gpu)slot.gpu->Release();
         if(slot.system)slot.system->Release();slot={};}
     if(g_pixels)UnmapViewOfFile(g_pixels); if(g_pixelMapping)CloseHandle(g_pixelMapping);
@@ -173,8 +219,11 @@ HRESULT Draw(IDirect3DDevice9* device,IDirect3DTexture9* texture,void(*log)(cons
         log(message);g_depthStateLogged=true;
     }
     depth->Release();
-    IDirect3DStateBlock9* saved=nullptr;const HRESULT stateBlock=device->CreateStateBlock(D3DSBT_ALL,&saved);
-    if(FAILED(stateBlock))return stateBlock;saved->Capture();D3DMATRIX world{};world._11=world._22=world._33=world._44=1;
+    if(!g_savedState){
+        const HRESULT stateBlock=device->CreateStateBlock(D3DSBT_ALL,&g_savedState);
+        if(FAILED(stateBlock))return stateBlock;
+    }
+    g_savedState->Capture();D3DMATRIX world{};world._11=world._22=world._33=world._44=1;
     D3DMATRIX view{},projection{};std::memcpy(&view,state::g_viewMatrix.data(),sizeof(view));
     std::memcpy(&projection,state::g_projectionMatrix.data(),sizeof(projection));
     device->SetTransform(D3DTS_WORLD,&world);device->SetTransform(D3DTS_VIEW,&view);device->SetTransform(D3DTS_PROJECTION,&projection);
@@ -201,45 +250,72 @@ HRESULT Draw(IDirect3DDevice9* device,IDirect3DTexture9* texture,void(*log)(cons
     device->SetTextureStageState(0,D3DTSS_ALPHAOP,D3DTOP_DISABLE);device->SetTextureStageState(1,D3DTSS_COLOROP,D3DTOP_DISABLE);
     device->SetTextureStageState(0,D3DTSS_TEXCOORDINDEX,0);device->SetTextureStageState(0,D3DTSS_TEXTURETRANSFORMFLAGS,D3DTTFF_DISABLE);
     device->SetVertexShader(nullptr);device->SetPixelShader(nullptr);device->SetFVF(D3DFVF_XYZ|D3DFVF_TEX1);device->SetTexture(0,texture);
-    struct Vertex{float x,y,z,u,v;};const float aspect=g_shared&&g_shared->width?
-        static_cast<float>(g_shared->height)/g_shared->width:9.0f/16.0f;
-    const Vec3 right=Scale(g_plane.right,1.2f),up=Scale(g_plane.up,1.2f*aspect);
-    const Vec3 a=Add(Add(g_plane.center,Scale(right,-1)),up),b=Add(Add(g_plane.center,right),up);
-    const Vec3 c=Add(Add(g_plane.center,Scale(right,-1)),Scale(up,-1)),d=Add(Add(g_plane.center,right),Scale(up,-1));
-    const Vertex vertices[]={{a.x,a.y,a.z,0,0},{b.x,b.y,b.z,1,0},{c.x,c.y,c.z,0,1},{d.x,d.y,d.z,1,1}};
-    const HRESULT drawn=device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP,2,vertices,sizeof(Vertex));
-    saved->Apply();saved->Release();return drawn;
+    struct Vertex{float x,y,z,u,v;};
+    constexpr int segments=48;
+    std::array<Vertex,segments+2> vertices{};
+    const float centerU=(portal_visual::kCropLeft+portal_visual::kCropRight)*0.5f;
+    const float centerV=(portal_visual::kCropTop+portal_visual::kCropBottom)*0.5f;
+    vertices[0]={g_plane.center.x,g_plane.center.y,g_plane.center.z,centerU,centerV};
+    // Visual-only billboard uses the vector from the portal centre to this
+    // game's real camera position. Camera look direction and CJ are irrelevant.
+    const Vec3 camera=Copy(state::g_state.cameraPosition);
+    constexpr float pi=3.14159265358979323846f;
+    const float facingYaw=std::atan2(-(camera.x-g_plane.center.x),
+                                     camera.y-g_plane.center.y)+pi;
+    const Vec3 runtimeRight{std::cos(facingYaw),std::sin(facingYaw),0.0f};
+    for(int segment=0;segment<=segments;++segment){
+        const float angle=2.0f*pi*static_cast<float>(segment)/segments;
+        const float nx=std::cos(angle),ny=std::sin(angle);
+        const float x=nx*g_radius;
+        const float y=ny*g_radius;
+        const Vec3 position=Add(Add(g_plane.center,Scale(runtimeRight,x)),Scale(g_plane.up,y));
+        const float u=portal_visual::kCropLeft+(nx*0.5f+0.5f)*
+            (portal_visual::kCropRight-portal_visual::kCropLeft);
+        const float v=portal_visual::kCropTop+(0.5f-ny*0.5f)*
+            (portal_visual::kCropBottom-portal_visual::kCropTop);
+        vertices[segment+1]={position.x,position.y,position.z,u,v};
+    }
+    const HRESULT drawn=device->DrawPrimitiveUP(D3DPT_TRIANGLEFAN,
+        segments,vertices.data(),sizeof(Vertex));
+    g_savedState->Apply();return drawn;
 }
 } // namespace
 
 void OnGameProcess(void(*log)(const char*)) {
     static bool loaded=false;if(!loaded){LoadPlane();loaded=true;}
     const bool pressed=(GetAsyncKeyState(VK_F9)&0x8000)!=0;
-    if(pressed&&!g_f9Down&&IsGameForeground()&&state::g_state.playerValid&&state::g_state.cameraValid){
+    if(pressed&&!g_f9Down&&IsGameForeground()){
+        g_followPlayer=!g_followPlayer;
+        g_openOverlayRequested=true;
+        if(!g_followPlayer){SavePlane();log("SA portal follow stopped; current placement saved");}
+        else log("SA portal follow started; press F9 again to lock and save");
+    }
+    if(g_followPlayer&&state::g_state.playerValid&&state::g_state.cameraValid){
         const float heading=state::g_state.playerHeading;
         const Vec3 forward=Unit({-std::sin(heading),std::cos(heading),0.0f});
         const Vec3 worldUp{0.0f,0.0f,1.0f},right=Unit(Cross(forward,worldUp));
         if(right.x||right.y||right.z){
-            // Anchor the pane in front of CJ, not in front of the third-person camera.
-            // The camera is already about three metres behind CJ in the normal view.
             const Vec3 player=Copy(state::g_state.playerPosition);
-            g_plane.center=Add(player,Scale(forward,3.0f));
-            g_plane.center.z=player.z+1.5f;
-            g_plane.right=right;g_plane.up=worldUp;g_plane.placed=true;SavePlane();
+            g_plane.center=player;
+            g_plane.center.z=player.z+g_centerAboveGround;
+            g_plane.right=right;g_plane.up=worldUp;g_plane.placed=true;
+            constexpr float radiansToDegrees=57.295779513082320876f;
+            g_savedYawDegrees=heading*radiansToDegrees;
+            camera_override::PublishPortalPlacement(
+                g_plane.center.x,g_plane.center.y,g_plane.center.z,g_savedYawDegrees);
             g_depthStateLogged=false;
-            char message[256]{};
-            std::snprintf(message,sizeof(message),
-                "V consumer portal placed 3 m ahead of player: center=(%.3f,%.3f,%.3f) right=(%.3f,%.3f,%.3f) up=(0,0,1)",
-                g_plane.center.x,g_plane.center.y,g_plane.center.z,
-                g_plane.right.x,g_plane.right.y,g_plane.right.z);
-            log(message);
         }
+    }
+    if(!g_publishedLoadedPlane&&g_plane.placed){
+        camera_override::PublishPortalPlacement(
+            g_plane.center.x,g_plane.center.y,g_plane.center.z,g_savedYawDegrees);
+        g_publishedLoadedPlane=true;
     }
     g_f9Down=pressed;
 }
 
 void OnRenderScene(IDirect3DDevice9* device,void(*log)(const char*)) {
-    if(!device||!AttachControl(log))return;
+    if(!device||!camera_override::PortalVisible()||!AttachControl(log))return;
     if(g_generation!=g_shared->generation||g_device!=device||!g_pixels){const DWORD now=GetTickCount();
         if(g_lastResourceAttempt&&now-g_lastResourceAttempt<500)return;g_lastResourceAttempt=now;
         if(!CreateUploads(device,log))return;}
@@ -251,4 +327,14 @@ void OnRenderScene(IDirect3DDevice9* device,void(*log)(const char*)) {
         InterlockedIncrement(&g_shared->displayed);InterlockedExchange(&g_shared->stage,v_to_sa::kStreaming);}
 }
 void BeforeReset(){ReleaseUploads();}
+VisualTuning GetVisualTuning(){return {g_radius,g_centerAboveGround,g_followPlayer};}
+void SetVisualTuning(float radius,float centerAboveGround){
+    radius=std::clamp(radius,0.25f,20.0f);
+    centerAboveGround=std::clamp(centerAboveGround,-20.0f,20.0f);
+    const float groundZ=g_plane.center.z-g_centerAboveGround;
+    g_radius=radius;g_centerAboveGround=centerAboveGround;g_plane.center.z=groundZ+g_centerAboveGround;
+    g_depthStateLogged=false;
+}
+void SaveVisualTuning(){SavePlane();}
+bool ConsumeOverlayOpenRequest(){const bool requested=g_openOverlayRequested;g_openOverlayRequested=false;return requested;}
 } // namespace portal_sa::v_consumer
