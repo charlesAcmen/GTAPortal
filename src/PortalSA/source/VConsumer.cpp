@@ -32,6 +32,7 @@ wchar_t g_planePath[MAX_PATH]{};
 LONG g_generation = 0;
 int g_active = -1;
 bool g_f9Down = false;
+bool g_f8Down = false;
 bool g_followPlayer = false;
 bool g_openOverlayRequested = false;
 bool g_publishedLoadedPlane = false;
@@ -283,8 +284,19 @@ HRESULT Draw(IDirect3DDevice9* device,IDirect3DTexture9* texture,void(*log)(cons
 
 void OnGameProcess(void(*log)(const char*)) {
     static bool loaded=false;if(!loaded){LoadPlane();loaded=true;}
+    const bool foreground=IsGameForeground();
+    const bool editPressed=(GetAsyncKeyState(VK_F8)&0x8000)!=0;
+    if(editPressed&&!g_f8Down&&foreground){
+        if(g_followPlayer){
+            g_followPlayer=false;
+            SavePlane();
+            log("SA portal follow stopped by F8; placement locked for size editing");
+        }
+        g_openOverlayRequested=true;
+    }
+    g_f8Down=editPressed;
     const bool pressed=(GetAsyncKeyState(VK_F9)&0x8000)!=0;
-    if(pressed&&!g_f9Down&&IsGameForeground()){
+    if(pressed&&!g_f9Down&&foreground){
         g_followPlayer=!g_followPlayer;
         g_openOverlayRequested=true;
         if(!g_followPlayer){SavePlane();log("SA portal follow stopped; current placement saved");}

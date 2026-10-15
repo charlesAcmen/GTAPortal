@@ -64,7 +64,7 @@ void Render(IDirect3DDevice9* device) {
                                   0.01f,-20.0f,20.0f,"%.2f m");
         if(changed)v_consumer::SetVisualTuning(tuning.radius,tuning.centerAboveGround);
         if(ImGui::Button("Save circle tuning"))v_consumer::SaveVisualTuning();
-        ImGui::SameLine();ImGui::TextUnformatted("F9 places/follows; no XY/Yaw controls here.");
+        ImGui::SameLine();ImGui::TextUnformatted("F8 locks position; F9 places/follows.");
     }
     ImGui::End();g_visible=open;
     ImGui::Render();ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
