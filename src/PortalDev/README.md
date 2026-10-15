@@ -4,6 +4,8 @@
 
 PortalDev no longer displays either game's live picture and does not create preview swap chains. The required background transports remain active: GTA V window capture feeds V→SA, while SA main-window WGC feeds SA→V. The compact UI keeps only build, deployment, directory, log, teleport, and camera-calibration controls.
 
+Each pixel transport now runs only while its destination portal is visible. Hiding the SA-side portal stops the expensive GTA V D3D11-to-CPU readback/upload path; hiding the GTA V-side portal stops SA window capture. Camera pose synchronization uses separate lightweight shared memory and continues independently.
+
 The SA status reports whether the mapped GTA V pose is currently controlling SA's main camera. If SA exits, PortalDev waits for the restarted game instead of showing an old connection.
 
 ## Build and run

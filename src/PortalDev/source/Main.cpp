@@ -227,6 +227,13 @@ int64_t Qpc() {
 }
 
 void CaptureGameFrame() {
+    // SA -> V pixels are useful only while the GTA V-side portal is visible.
+    // Camera synchronization uses the lightweight shared-state channel and
+    // remains active even while this expensive WGC transport is stopped.
+    if(!g_showVPortal){
+        g_capture.Stop();
+        return;
+    }
     DWORD pid = 0;
     const HWND gameWindow = IsGameRunning(&pid) ? game_process::FindVisibleWindow(pid) : nullptr;
     if (!gameWindow) {
@@ -245,7 +252,9 @@ void CaptureGameFrame() {
 }
 
 void CaptureVFrame() {
-    if (!g_gtaVValid) {
+    // V -> SA is the expensive CPU-readback direction. Do not capture or copy
+    // full-resolution frames while the SA-side portal is hidden.
+    if (!g_gtaVValid || !g_showSaPortal) {
         g_vCapture.Stop();
         return;
     }
